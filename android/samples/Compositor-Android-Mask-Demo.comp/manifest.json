@@ -1,0 +1,155 @@
+{
+  "format": "com.compositor.project",
+  "version": 11,
+  "colorSpace": "sRGB",
+  "documentID": "22000000-0000-4000-8000-000000000001",
+  "width": 800,
+  "height": 500,
+  "resolution": 72,
+  "activeLayerID": "21000000-0000-4000-8000-000000000006",
+  "layers": [
+    {
+      "id": "21000000-0000-4000-8000-000000000001",
+      "name": "海色背景",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "imageFile": "21000000-0000-4000-8000-000000000001.png"
+    },
+    {
+      "id": "21000000-0000-4000-8000-000000000002",
+      "name": "像素蒙版：红色渐隐",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "imageFile": "21000000-0000-4000-8000-000000000002.png",
+      "maskFile": "21000000-0000-4000-8000-000000000002.mask.png",
+      "maskEnabled": true
+    },
+    {
+      "id": "21000000-0000-4000-8000-000000000003",
+      "name": "组蒙版：上半显示",
+      "isVisible": true,
+      "isGroup": true,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "maskFile": "21000000-0000-4000-8000-000000000003.mask.png",
+      "maskEnabled": true
+    },
+    {
+      "id": "21000000-0000-4000-8000-000000000004",
+      "name": "组内绿色图层",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "imageFile": "21000000-0000-4000-8000-000000000004.png",
+      "parentID": "21000000-0000-4000-8000-000000000003"
+    },
+    {
+      "id": "21000000-0000-4000-8000-000000000005",
+      "name": "剪贴来源（隐藏透明圆）",
+      "imageFile": "21000000-0000-4000-8000-000000000005.png",
+      "isVisible": false,
+      "isGroup": false,
+      "opacity": 0.7,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "21000000-0000-4000-8000-000000000006",
+      "name": "剪贴图层：黄色圆",
+      "imageFile": "21000000-0000-4000-8000-000000000006.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "maskSourceID": "21000000-0000-4000-8000-000000000005"
+    }
+  ]
+}

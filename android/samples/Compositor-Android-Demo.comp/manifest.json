@@ -1,0 +1,152 @@
+{
+  "format": "com.compositor.project",
+  "version": 11,
+  "colorSpace": "sRGB",
+  "documentID": "20000000-0000-4000-8000-000000000001",
+  "width": 800,
+  "height": 500,
+  "resolution": 72,
+  "activeLayerID": "10000000-0000-4000-8000-000000000006",
+  "layers": [
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "name": "暮色天空",
+      "imageFile": "10000000-0000-4000-8000-000000000001.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "name": "星光与月亮",
+      "imageFile": "10000000-0000-4000-8000-000000000002.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000003",
+      "name": "海湾与灯塔",
+      "isVisible": true,
+      "isGroup": true,
+      "opacity": 0.94,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000004",
+      "name": "远山",
+      "imageFile": "10000000-0000-4000-8000-000000000004.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "parentID": "10000000-0000-4000-8000-000000000003"
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000005",
+      "name": "海面",
+      "imageFile": "10000000-0000-4000-8000-000000000005.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "parentID": "10000000-0000-4000-8000-000000000003"
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000006",
+      "name": "灯塔与光束",
+      "imageFile": "10000000-0000-4000-8000-000000000006.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "parentID": "10000000-0000-4000-8000-000000000003"
+    }
+  ]
+}
