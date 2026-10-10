@@ -1,0 +1,196 @@
+{
+  "format": "com.compositor.project",
+  "version": 11,
+  "colorSpace": "sRGB",
+  "documentID": "32000000-0000-4000-8000-000000000000",
+  "width": 800,
+  "height": 500,
+  "resolution": 72,
+  "activeLayerID": "32000000-0000-4000-8000-000000000008",
+  "layers": [
+    {
+      "id": "32000000-0000-4000-8000-000000000001",
+      "name": "Two-color backdrop",
+      "imageFile": "32000000-0000-4000-8000-000000000001.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "32000000-0000-4000-8000-000000000002",
+      "name": "Normal",
+      "imageFile": "32000000-0000-4000-8000-000000000002.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Normal",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "32000000-0000-4000-8000-000000000003",
+      "name": "Darken",
+      "imageFile": "32000000-0000-4000-8000-000000000003.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Darken",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "32000000-0000-4000-8000-000000000004",
+      "name": "Multiply",
+      "imageFile": "32000000-0000-4000-8000-000000000004.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Multiply",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "32000000-0000-4000-8000-000000000005",
+      "name": "Lighten",
+      "imageFile": "32000000-0000-4000-8000-000000000005.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Lighten",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "32000000-0000-4000-8000-000000000006",
+      "name": "Screen",
+      "imageFile": "32000000-0000-4000-8000-000000000006.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Screen",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "32000000-0000-4000-8000-000000000007",
+      "name": "Overlay",
+      "imageFile": "32000000-0000-4000-8000-000000000007.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Overlay",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    },
+    {
+      "id": "32000000-0000-4000-8000-000000000008",
+      "name": "Difference",
+      "imageFile": "32000000-0000-4000-8000-000000000008.png",
+      "isVisible": true,
+      "isGroup": false,
+      "opacity": 1.0,
+      "blendMode": "Difference",
+      "transform": {
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "width": 800,
+          "height": 500
+        },
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      }
+    }
+  ]
+}

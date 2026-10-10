@@ -74,85 +74,79 @@ class CompProjectReader(private val context: Context) {
         val rootUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootId)
         val root = queryEntry(rootUri)
         require(root.mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
-            "所选位置不是文件夹。请选择 .comp 项目文件夹。"
+            "The selected location is not a folder. Choose a .comp project folder."
         }
 
         val rootEntries = listChildren(treeUri, rootId)
-        val rootByName = uniqueEntries(rootEntries, "项目文件夹")
+        val rootByName = uniqueEntries(rootEntries, "project folder")
         val manifestEntry = rootByName["manifest.json"]
-            ?: throw IllegalArgumentException("项目中找不到 manifest.json。")
+            ?: throw IllegalArgumentException("The project does not contain manifest.json.")
         require(manifestEntry.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) {
-            "项目清单 manifest.json 不是文件。"
+            "manifest.json is not a file."
         }
-        requireWithinLimit(manifestEntry, MAX_MANIFEST_BYTES.toLong(), "项目清单")
+        requireWithinLimit(manifestEntry, MAX_MANIFEST_BYTES.toLong(), "project manifest")
         val manifestBytes = readLimited(documentUri(treeUri, manifestEntry.id), MAX_MANIFEST_BYTES)
         val manifestText = String(manifestBytes, Charsets.UTF_8)
         val manifest = try {
             JSONObject(manifestText)
         } catch (error: JSONException) {
-            throw IllegalArgumentException("项目清单不是有效的 JSON。", error)
+            throw IllegalArgumentException("The project manifest is not valid JSON.", error)
         }
 
         val version = manifest.requiredInt("version")
-        require(manifest.requiredString("format") == FORMAT) { "这不是 Compositor 项目。" }
+        require(manifest.requiredString("format") == FORMAT) { "This is not a Compositor project." }
         require(version in MIN_VERSION..CURRENT_VERSION) {
-            "此项目格式版本为 $version，当前支持 $MIN_VERSION 至 $CURRENT_VERSION。"
+            "Project format version $version is not supported. Supported versions are $MIN_VERSION through $CURRENT_VERSION."
         }
-        require(manifest.requiredString("colorSpace") == "sRGB") { "项目使用不支持的色彩空间。" }
+        require(manifest.requiredString("colorSpace") == "sRGB") { "This project uses an unsupported color space." }
         val width = manifest.requiredInt("width")
         val height = manifest.requiredInt("height")
-        require(width in 1..MAX_SIDE && height in 1..MAX_SIDE) { "画布尺寸超出支持范围。" }
-        val documentId = canonicalUuid(manifest.requiredString("documentID"), "文档 ID")
+        require(width in 1..MAX_SIDE && height in 1..MAX_SIDE) { "Canvas dimensions exceed the supported range." }
+        val documentId = canonicalUuid(manifest.requiredString("documentID"), "document ID")
         val resolution = manifest.optionalDouble("resolution", 72.0)
-        require(resolution.isFinite() && resolution in 1.0..9600.0) { "项目分辨率无效。" }
+        require(resolution.isFinite() && resolution in 1.0..9600.0) { "Project resolution is invalid." }
 
         val layersJson = manifest.optJSONArray("layers")
-            ?: throw IllegalArgumentException("项目缺少图层列表。")
-        require(layersJson.length() <= MAX_LAYERS) { "项目图层数量超出支持范围。" }
+            ?: throw IllegalArgumentException("The project has no layer list.")
+        require(layersJson.length() <= MAX_LAYERS) { "The project contains too many layers." }
         val layers = parseLayers(layersJson, version)
         validateHierarchy(layers)
         validateLiveMasks(layers, version)
         val ids = layers.mapTo(HashSet()) { it.id }
         val activeLayer = manifest.optNullableString("activeLayerID")?.let {
-            canonicalUuid(it, "活动图层 ID").also { id ->
-                require(ids.contains(id)) { "活动图层不存在。" }
+            canonicalUuid(it, "active layer ID").also { id ->
+                require(ids.contains(id)) { "The active layer does not exist." }
             }
         }
         validateGuides(manifest, version)
 
         val imagesEntry = rootByName["images"]
-            ?: throw IllegalArgumentException("项目中找不到 images 图层文件夹。")
+            ?: throw IllegalArgumentException("The project does not contain an images folder.")
         require(imagesEntry.mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
-            "项目的 images 位置不是文件夹。"
+            "The project images entry is not a folder."
         }
-        val imageEntries = uniqueEntries(listChildren(treeUri, imagesEntry.id), "images 文件夹")
-        var imagePixels = 0L
-        var maskPixels = 0L
+        val imageEntries = uniqueEntries(listChildren(treeUri, imagesEntry.id), "images folder")
         val imageUris = LinkedHashMap<String, Uri>()
         val imageSizes = LinkedHashMap<String, PixelSize>()
         val maskUris = LinkedHashMap<String, Uri>()
         val maskSizes = LinkedHashMap<String, PixelSize>()
         for (layer in layers) {
             layer.imageFile?.let { filename ->
-                val entry = imageEntries[filename] ?: throw IllegalArgumentException("图层“${layer.name}”的图片文件缺失。")
-                require(entry.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) { "图层图片不是文件。" }
-                requireWithinLimit(entry, MAX_ASSET_BYTES, "图层图片")
+                val entry = imageEntries[filename] ?: throw IllegalArgumentException("Image file is missing for layer “${layer.name}”.")
+                require(entry.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) { "Layer image is not a file." }
+                requireWithinLimit(entry, MAX_ASSET_BYTES, "layer image")
                 val uri = documentUri(treeUri, entry.id)
-                val png = readPngInfo(uri, "图层“${layer.name}”")
-                require(png.bitDepth <= 8) { "图层“${layer.name}”的 PNG 位深超出支持范围。" }
-                imagePixels += png.width.toLong() * png.height.toLong()
-                require(imagePixels <= MAX_TOTAL_PIXELS) { "项目图层像素总量超出支持范围。" }
+                val png = readPngInfo(uri, "Layer “${layer.name}”")
+                require(png.bitDepth <= 8) { "The PNG bit depth for layer “${layer.name}” exceeds the supported range." }
                 imageUris[filename] = uri
                 imageSizes[filename] = PixelSize(png.width, png.height)
             }
             layer.maskFile?.let { filename ->
-                val entry = imageEntries[filename] ?: throw IllegalArgumentException("图层“${layer.name}”的蒙版文件缺失。")
-                require(entry.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) { "蒙版不是文件。" }
-                requireWithinLimit(entry, MAX_ASSET_BYTES, "图层蒙版")
-                val png = readPngInfo(documentUri(treeUri, entry.id), "图层“${layer.name}”的蒙版")
-                require(png.bitDepth <= 8 && png.colorType == 0) { "图层“${layer.name}”的蒙版不是 8 位灰度 PNG。" }
-                maskPixels += png.width.toLong() * png.height.toLong()
-                require(maskPixels <= MAX_TOTAL_PIXELS) { "项目蒙版像素总量超出支持范围。" }
+                val entry = imageEntries[filename] ?: throw IllegalArgumentException("Mask file is missing for layer “${layer.name}”.")
+                require(entry.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) { "Layer mask is not a file." }
+                requireWithinLimit(entry, MAX_ASSET_BYTES, "layer mask")
+                val png = readPngInfo(documentUri(treeUri, entry.id), "Layer “${layer.name}” mask")
+                require(png.bitDepth <= 8 && png.colorType == 0) { "The mask for layer “${layer.name}” is not an 8-bit grayscale PNG." }
                 maskUris[filename] = documentUri(treeUri, entry.id)
                 maskSizes[filename] = PixelSize(png.width, png.height)
             }
@@ -168,18 +162,18 @@ class CompProjectReader(private val context: Context) {
         val seen = HashSet<String>()
         for (index in 0 until records.length()) {
             val record = records.optJSONObject(index)
-                ?: throw IllegalArgumentException("第 ${index + 1} 个图层信息损坏。")
-            val id = canonicalUuid(record.requiredString("id"), "图层 ID")
-            require(seen.add(id)) { "项目中有重复的图层 ID。" }
+                ?: throw IllegalArgumentException("Layer ${index + 1} is malformed.")
+            val id = canonicalUuid(record.requiredString("id"), "layer ID")
+            require(seen.add(id)) { "The project contains duplicate layer IDs." }
             val name = record.requiredString("name")
             require(name.isNotBlank() && name.toByteArray(Charsets.UTF_8).size <= MAX_LAYER_NAME_BYTES) {
-                "图层名称无效或过长。"
+                "The layer name is empty or too long."
             }
             val visible = record.requiredBoolean("isVisible")
             val group = record.optionalBoolean("isGroup", false)
             val hasAdjustment = record.has("adjustment") && !record.isNull("adjustment")
-            val parentId = record.optNullableString("parentID")?.let { canonicalUuid(it, "父组 ID") }
-            val maskSourceId = record.optNullableString("maskSourceID")?.let { canonicalUuid(it, "剪贴蒙版来源 ID") }
+            val parentId = record.optNullableString("parentID")?.let { canonicalUuid(it, "parent group ID") }
+            val maskSourceId = record.optNullableString("maskSourceID")?.let { canonicalUuid(it, "clipping mask source ID") }
             val imageFile = record.optNullableString("imageFile")
             val maskFile = record.optNullableString("maskFile")
             val maskEnabled = if (record.has("maskEnabled") && !record.isNull("maskEnabled")) {
@@ -189,53 +183,53 @@ class CompProjectReader(private val context: Context) {
             }
             val expectedImage = "$id.png"
             val expectedMask = "$id.mask.png"
-            require(imageFile == null || imageFile == expectedImage) { "图层“$name”的图片文件名无效。" }
-            require(maskFile == null || maskFile == expectedMask) { "图层“$name”的蒙版文件名无效。" }
-            require(!record.has("maskEnabled") || record.isNull("maskEnabled") || maskFile != null) { "没有蒙版文件却设置了蒙版状态。" }
+            require(imageFile == null || imageFile == expectedImage) { "The image filename for layer “$name” is invalid." }
+            require(maskFile == null || maskFile == expectedMask) { "The mask filename for layer “$name” is invalid." }
+            require(!record.has("maskEnabled") || record.isNull("maskEnabled") || maskFile != null) { "A mask state was set without a mask file." }
             if (record.has("maskEnabled") && !record.isNull("maskEnabled")) record.requiredBoolean("maskEnabled")
             val opacity = record.optionalDouble("opacity", 1.0)
-            require(opacity.isFinite() && opacity in 0.0..1.0) { "图层“$name”的不透明度无效。" }
+            require(opacity.isFinite() && opacity in 0.0..1.0) { "Opacity for layer “$name” is invalid." }
             val blendMode = record.optNullableString("blendMode") ?: "Normal"
-            require(blendMode in BLEND_MODES) { "图层“$name”的混合模式不受支持。" }
-            require(version >= 3 || (opacity == 1.0 && blendMode == "Normal")) { "旧格式项目包含不支持的图层外观字段。" }
+            require(blendMode in BLEND_MODES) { "The blend mode for layer “$name” is not supported." }
+            require(version >= 3 || (opacity == 1.0 && blendMode == "Normal")) { "This older project format contains unsupported layer appearance settings." }
             if (group) {
-                require(imageFile == null) { "组图层不能包含像素图片。" }
-                require(blendMode == "Normal" && (version >= 8 || opacity == 1.0)) { "组图层外观字段无效。" }
-                require(version >= 2 || parentId == null) { "版本 1 项目不能包含组图层。" }
-                require(maskFile == null || version >= 6) { "此项目版本不能包含组蒙版。" }
+                require(imageFile == null) { "Group layers cannot contain pixel images." }
+                require(blendMode == "Normal" && (version >= 8 || opacity == 1.0)) { "Group layer appearance settings are invalid." }
+                require(version >= 2 || parentId == null) { "Version 1 projects cannot contain group layers." }
+                require(maskFile == null || version >= 6) { "This project version cannot contain group masks." }
             } else {
-                require(maskFile == null || version >= 4) { "此项目版本不能包含图层蒙版。" }
+                require(maskFile == null || version >= 4) { "This project version cannot contain layer masks." }
             }
             if (hasAdjustment) {
-                require(version >= 7 && !group && imageFile == null) { "调整图层信息无效。" }
+                require(version >= 7 && !group && imageFile == null) { "Adjustment layer data is invalid." }
                 val adjustment = record.optJSONObject("adjustment")
-                    ?: throw IllegalArgumentException("图层“$name”的调整信息损坏。")
+                    ?: throw IllegalArgumentException("Adjustment data for layer “$name” is malformed.")
                 val kind = adjustment.requiredString("kind")
-                require(kind in ADJUSTMENT_KINDS) { "图层“$name”的调整类型不受支持。" }
-                require(kind !in NEW_ADJUSTMENTS || version >= 9) { "此项目版本不能包含该调整类型。" }
+                require(kind in ADJUSTMENT_KINDS) { "The adjustment type for layer “$name” is not supported." }
+                require(kind !in NEW_ADJUSTMENTS || version >= 9) { "This project version cannot contain this adjustment type." }
             }
             if (record.has("text") && !record.isNull("text")) {
-                require(imageFile != null && !group && !hasAdjustment) { "文字图层信息无效。" }
+                require(imageFile != null && !group && !hasAdjustment) { "Text layer data is invalid." }
                 val text = record.optJSONObject("text")
-                    ?: throw IllegalArgumentException("图层“$name”的文字信息损坏。")
-                require(version >= 10 || !text.has("colorRuns") || text.isNull("colorRuns")) { "此项目版本不能包含文字颜色段。" }
-                require(version >= 11 || !text.has("fontRuns") || text.isNull("fontRuns")) { "此项目版本不能包含文字字体段。" }
+                    ?: throw IllegalArgumentException("Text data for layer “$name” is malformed.")
+                require(version >= 10 || !text.has("colorRuns") || text.isNull("colorRuns")) { "This project version cannot contain text color runs." }
+                require(version >= 11 || !text.has("fontRuns") || text.isNull("fontRuns")) { "This project version cannot contain text font runs." }
             }
-            if (version < 5) require(record.optNullableString("maskSourceID") == null) { "此项目版本不能包含剪贴蒙版链接。" }
+            if (version < 5) require(record.optNullableString("maskSourceID") == null) { "This project version cannot contain clipping mask links." }
             val transform = record.optJSONObject("transform")
-                ?: throw IllegalArgumentException("图层“$name”的变换信息缺失。")
-            val layerTransform = parseTransform(transform, "图层“$name”")
+                ?: throw IllegalArgumentException("Transform data is missing for layer “$name”.")
+            val layerTransform = parseTransform(transform, "Layer “$name”")
             require(!record.has("maskPlacement") || record.isNull("maskPlacement") || record.optJSONObject("maskPlacement") != null) {
-                "图层“$name”的蒙版位置无效。"
+                "Mask placement for layer “$name” is invalid."
             }
             val maskTransform = record.optJSONObject("maskPlacement")?.let {
-                parseTransform(it, "图层“$name”的蒙版")
+                parseTransform(it, "Mask for layer “$name”")
             }
             require(!record.has("maskPlacement") || record.isNull("maskPlacement") || maskFile != null) {
-                "图层“$name”设置了蒙版位置，却没有蒙版文件。"
+                "Layer “$name” has mask placement but no mask file."
             }
             require(!record.has("maskLinked") || record.isNull("maskLinked") || maskFile != null) {
-                "图层“$name”设置了蒙版链接状态，却没有蒙版文件。"
+                "Layer “$name” has a mask link state but no mask file."
             }
             if (record.has("maskLinked") && !record.isNull("maskLinked")) record.requiredBoolean("maskLinked")
             result += Layer(
@@ -251,16 +245,16 @@ class CompProjectReader(private val context: Context) {
         val byId = layers.associateBy { it.id }
         for (layer in layers) {
             val parentId = layer.parentId ?: continue
-            val parent = byId[parentId] ?: throw IllegalArgumentException("图层“${layer.name}”引用了不存在的父组。")
-            require(parent.group) { "图层“${layer.name}”的父级不是组图层。" }
+            val parent = byId[parentId] ?: throw IllegalArgumentException("Layer “${layer.name}” refers to a parent group that does not exist.")
+            require(parent.group) { "The parent of layer “${layer.name}” is not a group." }
             var current: Layer? = parent
             var depth = 0
             val seen = HashSet<String>()
             seen += layer.id
             while (current != null) {
-                require(seen.add(current.id)) { "项目的组层级形成循环。" }
+                require(seen.add(current.id)) { "The project group hierarchy contains a cycle." }
                 depth++
-                require(depth <= MAX_GROUP_DEPTH) { "项目的组嵌套层级过深。" }
+                require(depth <= MAX_GROUP_DEPTH) { "The project group nesting is too deep." }
                 current = current.parentId?.let { byId[it] }
             }
         }
@@ -271,10 +265,10 @@ class CompProjectReader(private val context: Context) {
         val sources = HashMap<String, String>()
         for (layer in layers) {
             val sourceId = layer.maskSourceId ?: continue
-            require(version >= 5) { "此项目版本不能包含剪贴蒙版链接。" }
-            val source = byId[sourceId] ?: throw IllegalArgumentException("图层“${layer.name}”引用了不存在的剪贴蒙版来源。")
+            require(version >= 5) { "This project version cannot contain clipping mask links." }
+            val source = byId[sourceId] ?: throw IllegalArgumentException("Layer “${layer.name}” refers to a clipping mask source that does not exist.")
             require(source.id != layer.id && !source.group && !source.adjustment && !layer.group) {
-                "剪贴蒙版不能连接到组、调整图层或自身。"
+                "A clipping mask cannot target a group, adjustment layer, or itself."
             }
             sources[layer.id] = source.id
         }
@@ -284,8 +278,8 @@ class CompProjectReader(private val context: Context) {
             var depth = 0
             while (current != null) {
                 depth++
-                require(depth <= MAX_MASK_DEPTH) { "剪贴蒙版链接层级过深。" }
-                require(seen.add(current)) { "项目的剪贴蒙版链接形成循环。" }
+                require(depth <= MAX_MASK_DEPTH) { "The clipping mask chain is too deep." }
+                require(seen.add(current)) { "The project clipping mask chain contains a cycle." }
                 current = sources[current]
             }
         }
@@ -293,27 +287,27 @@ class CompProjectReader(private val context: Context) {
 
     private fun validateGuides(manifest: JSONObject, version: Int) {
         require(!manifest.has("guides") || manifest.isNull("guides") || manifest.optJSONArray("guides") != null) {
-            "项目参考线数据格式无效。"
+            "Project guide data is invalid."
         }
         val guides = manifest.optJSONArray("guides") ?: JSONArray()
-        require(version >= 8 || guides.length() == 0) { "此项目版本不能包含参考线。" }
-        require(guides.length() <= MAX_GUIDES) { "项目参考线数量超出支持范围。" }
+        require(version >= 8 || guides.length() == 0) { "This project version cannot contain guides." }
+        require(guides.length() <= MAX_GUIDES) { "The project contains too many guides." }
         val ids = HashSet<String>()
         for (index in 0 until guides.length()) {
-            val guide = guides.optJSONObject(index) ?: throw IllegalArgumentException("参考线信息损坏。")
-            val id = canonicalUuid(guide.requiredString("id"), "参考线 ID")
-            require(ids.add(id)) { "项目中有重复的参考线 ID。" }
-            require(guide.requiredString("axis") in setOf("horizontal", "vertical")) { "参考线方向无效。" }
+            val guide = guides.optJSONObject(index) ?: throw IllegalArgumentException("Guide data is malformed.")
+            val id = canonicalUuid(guide.requiredString("id"), "guide ID")
+            require(ids.add(id)) { "The project contains duplicate guide IDs." }
+            require(guide.requiredString("axis") in setOf("horizontal", "vertical")) { "Guide orientation is invalid." }
             val position = guide.requiredFiniteDouble("position")
-            require(absWithin(position, 1_000_000.0)) { "参考线位置超出支持范围。" }
+            require(absWithin(position, 1_000_000.0)) { "Guide position exceeds the supported range." }
         }
     }
 
     private fun parseTransform(value: JSONObject, label: String): LayerTransform {
         val origin = value.optJSONObject("origin")
-            ?: throw IllegalArgumentException("${label}的变换位置无效。")
+            ?: throw IllegalArgumentException("The transform position for ${label} is invalid.")
         val size = value.optJSONObject("size")
-            ?: throw IllegalArgumentException("${label}的变换尺寸无效。")
+            ?: throw IllegalArgumentException("The transform size for ${label} is invalid.")
         val x = origin.requiredFiniteDouble("x")
         val y = origin.requiredFiniteDouble("y")
         val width = size.requiredFiniteDouble("width")
@@ -323,10 +317,10 @@ class CompProjectReader(private val context: Context) {
         val flipY = value.optionalBoolean("flipY", false)
         require(width in 1.0..300_000.0 && height in 1.0..300_000.0 &&
             absWithin(x, 1_000_000.0) && absWithin(y, 1_000_000.0) && rotation.isFinite()) {
-            "${label}的变换超出支持范围。"
+            "The transform for ${label} exceeds the supported range."
         }
         val sampling = value.optNullableString("sampling") ?: "High quality"
-        require(sampling in SAMPLING_MODES) { "${label}的采样方式无效。" }
+        require(sampling in SAMPLING_MODES) { "The sampling mode for ${label} is invalid." }
         return LayerTransform(x, y, width, height, rotation, flipX, flipY, sampling)
     }
 
@@ -341,7 +335,7 @@ class CompProjectReader(private val context: Context) {
         val result = ArrayList<Entry>()
         context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
             while (cursor.moveToNext()) result += cursor.toEntry()
-        } ?: throw IllegalArgumentException("无法读取所选文件夹。")
+        } ?: throw IllegalArgumentException("Could not read the selected folder.")
         return result
     }
 
@@ -355,7 +349,7 @@ class CompProjectReader(private val context: Context) {
         context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) return cursor.toEntry()
         }
-        throw IllegalArgumentException("无法读取所选文件夹。")
+        throw IllegalArgumentException("Could not read the selected folder.")
     }
 
     private fun Cursor.toEntry(): Entry {
@@ -371,7 +365,7 @@ class CompProjectReader(private val context: Context) {
     private fun uniqueEntries(entries: List<Entry>, location: String): Map<String, Entry> {
         val result = LinkedHashMap<String, Entry>()
         for (entry in entries) {
-            require(result.put(entry.name, entry) == null) { "$location 中有重名文件，无法安全判断项目内容。" }
+            require(result.put(entry.name, entry) == null) { "$location contains duplicate names, so project contents are ambiguous." }
         }
         return result
     }
@@ -380,24 +374,24 @@ class CompProjectReader(private val context: Context) {
         DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
 
     private fun requireWithinLimit(entry: Entry, maximum: Long, label: String) {
-        require(entry.size == null || entry.size in 0..maximum) { "$label 大小超出支持范围。" }
+        require(entry.size == null || entry.size in 0..maximum) { "$label exceeds the supported size limit." }
     }
 
     private fun readLimited(uri: Uri, maximum: Int): ByteArray {
         val output = ByteArrayOutputStream()
         context.contentResolver.openInputStream(uri)?.use { input -> copyLimited(input, output, maximum.toLong()) }
-            ?: throw IllegalArgumentException("无法打开项目清单。")
+            ?: throw IllegalArgumentException("Could not open the project manifest.")
         return output.toByteArray()
     }
 
     private fun readPngInfo(uri: Uri, label: String): PngInfo {
         val bytes = ByteArray(29)
         context.contentResolver.openInputStream(uri)?.use { input -> readExactly(input, bytes) }
-            ?: throw IllegalArgumentException("无法打开${label}的 PNG 文件。")
+            ?: throw IllegalArgumentException("Could not open the PNG for ${label}.")
         require(PNG_SIGNATURE.indices.all { bytes[it] == PNG_SIGNATURE[it] } &&
             bytes.copyOfRange(8, 12).contentEquals(byteArrayOf(0, 0, 0, 13)) &&
             bytes.copyOfRange(12, 16).contentEquals(byteArrayOf(73, 72, 68, 82))) {
-            "${label}不是有效的 PNG 文件。"
+            "${label} is not a valid PNG file."
         }
         val width = readInt32(bytes, 16)
         val height = readInt32(bytes, 20)
@@ -409,10 +403,10 @@ class CompProjectReader(private val context: Context) {
             3 -> bitDepth in setOf(1, 2, 4, 8)
             else -> false
         }
-        require(width in 1..MAX_SIDE && height in 1..MAX_SIDE) { "${label}的 PNG 尺寸超出支持范围。" }
+        require(width in 1..MAX_SIDE && height in 1..MAX_SIDE) { "PNG dimensions for ${label} exceed the supported range." }
         require(validBitDepth && bytes[26] == 0.toByte() && bytes[27] == 0.toByte() &&
             (bytes[28] == 0.toByte() || bytes[28] == 1.toByte())) {
-            "${label}的 PNG 头部数据无效。"
+            "The PNG header for ${label} is invalid."
         }
         return PngInfo(width, height, bitDepth, colorType)
     }
@@ -424,7 +418,7 @@ class CompProjectReader(private val context: Context) {
             val count = input.read(buffer)
             if (count < 0) break
             total += count
-            require(total <= maximum) { "项目清单大小超出 4 MiB 限制。" }
+            require(total <= maximum) { "The project manifest exceeds the 4 MiB limit." }
             output.write(buffer, 0, count)
         }
     }
@@ -433,7 +427,7 @@ class CompProjectReader(private val context: Context) {
         var offset = 0
         while (offset < bytes.size) {
             val count = input.read(bytes, offset, bytes.size - offset)
-            if (count < 0) throw IllegalArgumentException("PNG 文件不完整。")
+            if (count < 0) throw IllegalArgumentException("The PNG file is incomplete.")
             offset += count
         }
     }
@@ -448,24 +442,24 @@ class CompProjectReader(private val context: Context) {
         require(UUID_PATTERN.matches(value))
         UUID.fromString(value).toString().uppercase(Locale.ROOT)
     } catch (error: IllegalArgumentException) {
-        throw IllegalArgumentException("${label}格式无效。", error)
+        throw IllegalArgumentException("${label} is invalid.", error)
     }
 
     private fun JSONObject.requiredString(key: String): String =
         (if (has(key) && !isNull(key)) opt(key) as? String else null)
-            ?: throw IllegalArgumentException("项目字段“$key”缺失或无效。")
+            ?: throw IllegalArgumentException("Project field “$key” is missing or invalid.")
 
     private fun JSONObject.requiredInt(key: String): Int {
         val number = (opt(key) as? Number)?.toDouble() ?: Double.NaN
         require(number.isFinite() && number % 1.0 == 0.0 && number in Int.MIN_VALUE.toDouble()..Int.MAX_VALUE.toDouble()) {
-            "项目字段“$key”缺失或无效。"
+            "Project field “$key” is missing or invalid."
         }
         return number.toInt()
     }
 
     private fun JSONObject.requiredBoolean(key: String): Boolean {
         return (if (has(key) && !isNull(key)) opt(key) as? Boolean else null)
-            ?: throw IllegalArgumentException("项目字段“$key”缺失或无效。")
+            ?: throw IllegalArgumentException("Project field “$key” is missing or invalid.")
     }
 
     private fun JSONObject.requiredFiniteDouble(key: String): Double {
@@ -474,7 +468,7 @@ class CompProjectReader(private val context: Context) {
             is Number -> raw.toDouble()
             else -> Double.NaN
         }
-        require(value.isFinite()) { "项目字段“$key”缺失或无效。" }
+        require(value.isFinite()) { "Project field “$key” is missing or invalid." }
         return value
     }
 
@@ -501,7 +495,6 @@ class CompProjectReader(private val context: Context) {
         private const val MAX_LAYER_NAME_BYTES = 16_384
         private const val MAX_MANIFEST_BYTES = 4 * 1024 * 1024
         private const val MAX_ASSET_BYTES = 512L * 1024 * 1024
-        private const val MAX_TOTAL_PIXELS = 800_000_000L
         private val BLEND_MODES = setOf(
             "Normal", "Darken", "Multiply", "Color Burn", "Linear Burn", "Lighten", "Screen", "Color Dodge",
             "Linear Dodge (Add)", "Overlay", "Soft Light", "Hard Light", "Vivid Light", "Linear Light", "Pin Light",

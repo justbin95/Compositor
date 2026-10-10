@@ -6,7 +6,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -29,6 +28,7 @@ class MainActivity : Activity() {
     private val secondaryText = Color.rgb(190, 190, 190)
     private val worker = Executors.newSingleThreadExecutor()
     private val previewRequestId = AtomicInteger()
+    private val projectOpenRequestId = AtomicInteger()
     private lateinit var root: LinearLayout
     private lateinit var openButton: Button
     private lateinit var introText: TextView
@@ -51,7 +51,7 @@ class MainActivity : Activity() {
         selectedProjectUri = restoredUri
         selectedLayerId = savedInstanceState?.getString(STATE_LAYER_ID)
         savedLayerScrollPosition = savedInstanceState?.getInt(STATE_LAYER_SCROLL_POSITION) ?: 0
-        if (restoredUri != null) loadProjectFolder(restoredUri)
+        if (restoredUri != null) loadProjectFolder(restoredUri, restoringState = true)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -63,6 +63,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         previewRequestId.incrementAndGet()
+        projectOpenRequestId.incrementAndGet()
         worker.shutdownNow()
         if (::canvasPreviewView.isInitialized) canvasPreviewView.clear(getString(R.string.choose_project_status))
         super.onDestroy()
@@ -74,26 +75,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(this@MainActivity.background)
             setOnApplyWindowInsetsListener { view, insets ->
-                val left: Int
-                val top: Int
-                val right: Int
-                val bottom: Int
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-                    left = bars.left
-                    top = bars.top
-                    right = bars.right
-                    bottom = bars.bottom
-                } else {
-                    @Suppress("DEPRECATION")
-                    run {
-                        left = insets.systemWindowInsetLeft
-                        top = insets.systemWindowInsetTop
-                        right = insets.systemWindowInsetRight
-                        bottom = insets.systemWindowInsetBottom
-                    }
-                }
-                view.setPadding(dp(12) + left, dp(8) + top, dp(12) + right, bottom)
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                view.setPadding(dp(12) + bars.left, dp(8) + bars.top, dp(12) + bars.right, bars.bottom)
                 insets
             }
         }
@@ -126,12 +109,12 @@ class MainActivity : Activity() {
         projectSummaryText.setBackgroundColor(surface)
         projectSummaryText.visibility = View.GONE
 
-        canvasTitle = text("画布预览", 18, primaryText, bold = true)
+        canvasTitle = text(getString(R.string.canvas_composite_preview), 18, primaryText, bold = true)
         canvasTitle.visibility = View.GONE
 
         canvasPreviewView = CanvasPreviewView(this).apply { visibility = View.GONE }
 
-        layersTitle = text("图层（由上到下）", 18, primaryText, bold = true)
+        layersTitle = text(getString(R.string.layers_title), 18, primaryText, bold = true)
         layersTitle.visibility = View.GONE
 
         layerAdapter = LayerListAdapter()
@@ -209,41 +192,73 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != OPEN_PROJECT_REQUEST || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
-        selectedProjectUri = uri
-        selectedLayerId = null
-        savedLayerScrollPosition = 0
-        try {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        } catch (_: SecurityException) {
-            // The picker still grants a temporary read permission for this session.
-        }
         loadProjectFolder(uri)
     }
 
-    private fun loadProjectFolder(uri: Uri) {
-        currentProject = null
-        val request = previewRequestId.incrementAndGet()
-        canvasTitle.visibility = View.GONE
-        canvasPreviewView.visibility = View.GONE
+    private fun loadProjectFolder(uri: Uri, restoringState: Boolean = false) {
+        val request = projectOpenRequestId.incrementAndGet()
         openButton.isEnabled = false
         statusText.text = getString(R.string.project_loading_status)
-        layerAdapter.submit(emptyList())
-        projectSummaryText.visibility = View.GONE
-        layersTitle.visibility = View.GONE
         worker.execute {
+            var candidate: CompProjectReader.Project? = null
+            var failure: String? = null
             try {
                 val project = CompProjectReader(this).read(uri)
-                runOnUiThread {
-                    if (request == previewRequestId.get() && !isFinishing && !isDestroyed) showProject(project)
-                }
+                validateProjectAssets(project) { request != projectOpenRequestId.get() || isFinishing || isDestroyed }
+                candidate = project
             } catch (error: Exception) {
-                val message = error.message ?: getString(R.string.project_open_failed_status)
-                runOnUiThread {
-                    if (request != previewRequestId.get() || isFinishing || isDestroyed) return@runOnUiThread
-                    statusText.text = message
-                    openButton.isEnabled = true
-                }
+                failure = error.message ?: getString(R.string.project_open_failed_status)
+            } catch (_: OutOfMemoryError) {
+                failure = getString(R.string.project_open_memory_failure_status)
             }
+            runOnUiThread {
+                if (request != projectOpenRequestId.get() || isFinishing || isDestroyed) return@runOnUiThread
+                val project = candidate
+                if (project == null) {
+                    val message = failure ?: getString(R.string.project_open_failed_status)
+                    statusText.text = if (currentProject != null) {
+                        getString(R.string.project_open_preserved_status, message)
+                    } else {
+                        message
+                    }
+                    openButton.isEnabled = true
+                    return@runOnUiThread
+                }
+
+                if (!restoringState) {
+                    try {
+                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } catch (_: SecurityException) {
+                        // The picker still grants a temporary read permission for this session.
+                    }
+                    selectedProjectUri = uri
+                    selectedLayerId = null
+                    savedLayerScrollPosition = 0
+                }
+                showProject(project)
+            }
+        }
+    }
+
+    private fun validateProjectAssets(
+        project: CompProjectReader.Project,
+        isCancelled: () -> Boolean
+    ) {
+        fun validateAsset(name: String, uri: Uri, size: CompProjectReader.PixelSize?) {
+            if (isCancelled()) throw java.util.concurrent.CancellationException("Project preflight was cancelled")
+            val bitmap = try {
+                decodePreviewBitmap(uri, size)
+            } catch (error: Exception) {
+                throw IllegalArgumentException("Unable to decode project asset \"$name\".", error)
+            }
+            bitmap.recycle()
+        }
+
+        for ((filename, uri) in project.imageUris) {
+            validateAsset("images/$filename", uri, project.imageSizes[filename])
+        }
+        for ((filename, uri) in project.maskUris) {
+            validateAsset("images/$filename", uri, project.maskSizes[filename])
         }
     }
 
@@ -253,7 +268,8 @@ class MainActivity : Activity() {
         statusText.text = getString(R.string.project_opened_status)
         projectSummaryText.text = getString(
             R.string.project_summary, project.width, project.height, project.formatVersion,
-            project.layers.size, formatResolution(project.resolution)
+            resources.getQuantityString(R.plurals.layer_count, project.layers.size, project.layers.size),
+            formatResolution(project.resolution)
         )
         projectSummaryText.visibility = View.VISIBLE
         canvasTitle.visibility = View.VISIBLE
@@ -290,7 +306,10 @@ class MainActivity : Activity() {
                         if (completed == total || completed % 24 == 0) {
                             runOnUiThread {
                                 if (request == previewRequestId.get() && !isFinishing && !isDestroyed) {
-                                    statusText.text = getString(R.string.composite_progress_status, completed, total)
+                                    val totalLayers = resources.getQuantityString(
+                                        R.plurals.raster_layer_count, total, total
+                                    )
+                                    statusText.text = getString(R.string.composite_progress_status, completed, totalLayers)
                                 }
                             }
                         }
@@ -307,13 +326,16 @@ class MainActivity : Activity() {
                 }
                 if (completed != null) {
                     val limitations = completed.limitations.map { limitationLabel(it) }
-                        .distinct().joinToString("、")
+                        .distinct().joinToString(", ")
                         .ifBlank { getString(R.string.composite_no_known_limits) }
-                    val note = getString(R.string.composite_preview_note, completed.drawnLayerCount)
+                    val rasterLayerCount = resources.getQuantityString(
+                        R.plurals.raster_layer_count, completed.drawnLayerCount, completed.drawnLayerCount
+                    )
+                    val note = getString(R.string.composite_preview_note, rasterLayerCount)
                     canvasPreviewView.showComposite(project, completed.bitmap, note)
                     statusText.text = getString(
                         R.string.composite_loaded_status,
-                        completed.drawnLayerCount,
+                        rasterLayerCount,
                         if (completed.limitations.isEmpty()) getString(R.string.composite_no_known_limits)
                         else getString(R.string.composite_has_limits, limitations)
                     )
@@ -378,9 +400,8 @@ class MainActivity : Activity() {
     }
 
     private fun decodePreviewBitmap(uri: Uri, pixelSize: CompProjectReader.PixelSize?): Bitmap {
-        requireNotNull(pixelSize) { "项目没有记录这张 PNG 的尺寸。" }
-        var sampleSize = 1
-        while (maxOf(pixelSize.width, pixelSize.height) / sampleSize > MAX_PREVIEW_BITMAP_SIDE) sampleSize *= 2
+        requireNotNull(pixelSize) { "The project has no dimensions for this PNG." }
+        val sampleSize = AndroidRasterBudget.capture(this).sampleSizeFor(pixelSize.width, pixelSize.height)
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -388,7 +409,7 @@ class MainActivity : Activity() {
         }
         val decoded = contentResolver.openInputStream(uri)?.use { input ->
             BitmapFactory.decodeStream(input, null, options)
-        } ?: throw IllegalArgumentException("无法解码图层 PNG 文件。")
+        } ?: throw IllegalArgumentException("Could not decode the layer PNG.")
         return decoded
     }
 
@@ -484,7 +505,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val OPEN_PROJECT_REQUEST = 41
-        private const val MAX_PREVIEW_BITMAP_SIDE = 2048
         private const val STATE_PROJECT_URI = "projectTreeUri"
         private const val STATE_LAYER_ID = "selectedLayerId"
         private const val STATE_LAYER_SCROLL_POSITION = "layerScrollPosition"

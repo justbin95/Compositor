@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "CompositorAndroid"
-include(":app")
+include(":app", ":editor-core")

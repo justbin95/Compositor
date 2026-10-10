@@ -3,6 +3,7 @@ package com.wonderassembly.compositor
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorMatrix
@@ -32,7 +33,8 @@ internal class PreviewCompositeRenderer(private val context: Context) {
         isCancelled: () -> Boolean,
         onProgress: (completed: Int, total: Int) -> Unit
     ): Result {
-        val outputScale = minOf(1.0, MAX_OUTPUT_SIDE.toDouble() / maxOf(project.width, project.height))
+        val rasterBudget = AndroidRasterBudget.capture(context)
+        val outputScale = minOf(1.0, rasterBudget.maxPreviewSide.toDouble() / maxOf(project.width, project.height))
         val outputWidth = (project.width * outputScale).toInt().coerceAtLeast(1)
         val outputHeight = (project.height * outputScale).toInt().coerceAtLeast(1)
         val composite = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
@@ -50,7 +52,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 layer?.adjustment == false && layer.imageFile != null
         }
         val limitations = LinkedHashSet<PreviewLimitation>()
-        val maskBitmaps = MaskBitmapCache(context)
+        val maskBitmaps = MaskBitmapCache(context, rasterBudget)
         var liveCoverageSourceId: String? = null
         var liveCoverageBitmap: Bitmap? = null
         var processed = 0
@@ -58,7 +60,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
 
         try {
             for (entry in entries) {
-                if (isCancelled()) throw CancellationException("预览请求已取消")
+                if (isCancelled()) throw CancellationException("Preview request was cancelled")
                 if (!entry.effectivelyVisible || entry.effectiveOpacity <= 0.0) continue
                 val layer = layersById[entry.node.id] ?: continue
                 if (layer.hasEffects) limitations += PreviewLimitation.EFFECTS
@@ -71,14 +73,15 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 val imageFile = layer.imageFile
                 if (imageFile == null) continue
                 processed++
-                if (layer.blendMode != NORMAL_BLEND_MODE) {
+                val blendMode = canvasBlendMode(layer.blendMode)
+                if (blendMode == null) {
                     limitations += PreviewLimitation.BLEND_MODES
                     reportProgress(processed, candidates.size, onProgress)
                     continue
                 }
                 val uri = project.imageUris[imageFile]
-                    ?: throw IllegalArgumentException("图层“${layer.name}”引用的 PNG 不存在。")
-                val source = decodePreviewBitmap(uri, project.imageSizes[imageFile])
+                    ?: throw IllegalArgumentException("The PNG for layer “${layer.name}” does not exist.")
+                val source = decodePreviewBitmap(uri, project.imageSizes[imageFile], rasterBudget)
                 try {
                     val liveCoverage = layer.maskSourceId?.let { sourceId ->
                         if (sourceId != liveCoverageSourceId) {
@@ -87,7 +90,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                             liveCoverageSourceId = null
                             liveCoverageBitmap = renderLiveMaskCoverage(
                                 sourceId, project, layersById, effectiveOpacityById,
-                                outputWidth, outputHeight, isCancelled, maskBitmaps
+                                outputWidth, outputHeight, isCancelled, maskBitmaps, rasterBudget
                             )
                             liveCoverageSourceId = sourceId
                         }
@@ -95,7 +98,8 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                     }
                     drawLayer(
                         canvas, source, layer, entry.effectiveOpacity,
-                        PreviewMaskPlanner.forLayer(layer, layersById), liveCoverage, project, maskBitmaps
+                        PreviewMaskPlanner.forLayer(layer, layersById), liveCoverage, project, maskBitmaps,
+                        blendMode
                     )
                 } finally {
                     source.recycle()
@@ -103,7 +107,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 drawn++
                 reportProgress(processed, candidates.size, onProgress)
             }
-            if (isCancelled()) throw CancellationException("预览请求已取消")
+            if (isCancelled()) throw CancellationException("Preview request was cancelled")
             onProgress(candidates.size, candidates.size)
             return Result(composite, drawn, limitations)
         } catch (error: Throwable) {
@@ -123,7 +127,8 @@ internal class PreviewCompositeRenderer(private val context: Context) {
         outputWidth: Int,
         outputHeight: Int,
         isCancelled: () -> Boolean,
-        maskBitmaps: MaskBitmapCache
+        maskBitmaps: MaskBitmapCache,
+        rasterBudget: AndroidRasterBudget
     ): Bitmap {
         val coverage = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(coverage)
@@ -136,14 +141,14 @@ internal class PreviewCompositeRenderer(private val context: Context) {
 
         try {
             for (sourceLayer in chain) {
-                if (isCancelled()) throw CancellationException("蒙版预览请求已取消")
+                if (isCancelled()) throw CancellationException("Mask preview request was cancelled")
                 val imageFile = sourceLayer.imageFile
                 val imageUri = imageFile?.let { project.imageUris[it] }
                 val imageSize = imageFile?.let { project.imageSizes[it] }
                 val image = if (imageFile != null) {
                     decodePreviewBitmap(
-                        imageUri ?: throw IllegalArgumentException("剪贴蒙版来源“${sourceLayer.name}”的 PNG 不存在。"),
-                        imageSize
+                        imageUri ?: throw IllegalArgumentException("The PNG for clipping mask source “${sourceLayer.name}” does not exist."),
+                        imageSize, rasterBudget
                     )
                 } else {
                     null
@@ -170,7 +175,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 if (sourceLayer.maskFile != null && sourceLayer.maskEnabled) {
                     val file = sourceLayer.maskFile
                     val uri = project.maskUris[file]
-                        ?: throw IllegalArgumentException("图层蒙版“$file”不存在。")
+                        ?: throw IllegalArgumentException("Layer mask “$file” does not exist.")
                     val mask = maskBitmaps.get(file, uri, project.maskSizes[file])
                     val maskTransform = sourceLayer.maskTransform ?: sourceLayer.transform
                     val maskSave = canvas.saveLayer(documentBounds, maskCompositePaint())
@@ -197,20 +202,24 @@ internal class PreviewCompositeRenderer(private val context: Context) {
         masks: List<PreviewMaskPlanner.Mask>,
         liveCoverage: Bitmap?,
         project: CompProjectReader.Project,
-        maskBitmaps: MaskBitmapCache
+        maskBitmaps: MaskBitmapCache,
+        blendMode: BlendMode
     ) {
         val documentBounds = RectF(0f, 0f, project.width.toFloat(), project.height.toFloat())
         val bounds = transformedBounds(layer.transform)
         for (mask in masks) bounds.union(transformedBounds(mask.transform))
         if (!bounds.intersect(documentBounds)) return
 
-        val opacityPaint = Paint().apply { alpha = (opacity.coerceIn(0.0, 1.0) * 255).toInt() }
+        val opacityPaint = Paint().apply {
+            alpha = (opacity.coerceIn(0.0, 1.0) * 255).toInt()
+            this.blendMode = blendMode
+        }
         val contentSave = canvas.saveLayer(bounds, opacityPaint)
         try {
             drawBitmap(canvas, bitmap, layer.transform)
             for (mask in masks) {
                 val uri = project.maskUris[mask.file]
-                    ?: throw IllegalArgumentException("图层蒙版“${mask.file}”不存在。")
+                    ?: throw IllegalArgumentException("Layer mask “${mask.file}” does not exist.")
                 val maskBitmap = maskBitmaps.get(mask.file, uri, project.maskSizes[mask.file])
                 val paint = maskDrawPaint(mask.transform)
                 val maskSave = canvas.saveLayer(bounds, maskCompositePaint())
@@ -294,10 +303,13 @@ internal class PreviewCompositeRenderer(private val context: Context) {
         )
     }
 
-    private fun decodePreviewBitmap(uri: android.net.Uri, pixelSize: CompProjectReader.PixelSize?): Bitmap {
-        requireNotNull(pixelSize) { "项目没有记录这张 PNG 的尺寸。" }
-        var sampleSize = 1
-        while (maxOf(pixelSize.width, pixelSize.height) / sampleSize > MAX_OUTPUT_SIDE) sampleSize *= 2
+    private fun decodePreviewBitmap(
+        uri: android.net.Uri,
+        pixelSize: CompProjectReader.PixelSize?,
+        rasterBudget: AndroidRasterBudget
+    ): Bitmap {
+        requireNotNull(pixelSize) { "The project has no dimensions for this PNG." }
+        val sampleSize = rasterBudget.sampleSizeFor(pixelSize.width, pixelSize.height)
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -305,11 +317,12 @@ internal class PreviewCompositeRenderer(private val context: Context) {
         }
         return context.contentResolver.openInputStream(uri)?.use { input ->
             BitmapFactory.decodeStream(input, null, options)
-        } ?: throw IllegalArgumentException("无法解码图层 PNG 文件。")
+        } ?: throw IllegalArgumentException("Could not decode the layer PNG.")
     }
 
     private class MaskBitmapCache(
-        private val context: Context
+        private val context: Context,
+        private val rasterBudget: AndroidRasterBudget
     ) {
         private val cached = LinkedHashMap<String, Bitmap>(0, 0.75f, true)
         private val transient = ArrayList<Bitmap>()
@@ -317,22 +330,35 @@ internal class PreviewCompositeRenderer(private val context: Context) {
 
         fun get(file: String, uri: android.net.Uri, pixelSize: CompProjectReader.PixelSize?): Bitmap {
             cached[file]?.let { return it }
-            val bitmap = decodeMaskBitmap(context, uri, pixelSize)
+            requireNotNull(pixelSize) { "The project has no dimensions for this mask PNG." }
+            val sampleSize = rasterBudget.sampleSizeFor(pixelSize.width, pixelSize.height)
+            val expectedBytes =
+                ((pixelSize.width.toLong() + sampleSize - 1) / sampleSize) *
+                    ((pixelSize.height.toLong() + sampleSize - 1) / sampleSize) * 4L
+            if (expectedBytes <= rasterBudget.maxMaskCacheBytes) {
+                while (cachedBytes > rasterBudget.maxMaskCacheBytes - expectedBytes && cached.isNotEmpty()) {
+                    evictOldest()
+                }
+            }
+            val bitmap = decodeMaskBitmap(context, uri, pixelSize, sampleSize)
             val bytes = bitmap.allocationByteCount.toLong()
-            if (bytes > MAX_MASK_CACHE_BYTES) {
+            if (bytes > rasterBudget.maxMaskCacheBytes) {
                 transient += bitmap
                 return bitmap
             }
-            while (cachedBytes + bytes > MAX_MASK_CACHE_BYTES && cached.isNotEmpty()) {
-                val iterator = cached.entries.iterator()
-                val oldest = iterator.next()
-                cachedBytes -= oldest.value.allocationByteCount.toLong()
-                oldest.value.recycle()
-                iterator.remove()
-            }
+            while (cachedBytes > rasterBudget.maxMaskCacheBytes - bytes && cached.isNotEmpty()) evictOldest()
             cached[file] = bitmap
             cachedBytes += bytes
             return bitmap
+        }
+
+        private fun evictOldest() {
+            val iterator = cached.entries.iterator()
+            if (!iterator.hasNext()) return
+            val oldest = iterator.next()
+            cachedBytes -= oldest.value.allocationByteCount.toLong()
+            oldest.value.recycle()
+            iterator.remove()
         }
 
         fun finishLayer() {
@@ -350,11 +376,10 @@ internal class PreviewCompositeRenderer(private val context: Context) {
         private fun decodeMaskBitmap(
             context: Context,
             uri: android.net.Uri,
-            pixelSize: CompProjectReader.PixelSize?
+            pixelSize: CompProjectReader.PixelSize?,
+            sampleSize: Int
         ): Bitmap {
-            requireNotNull(pixelSize) { "项目没有记录蒙版 PNG 的尺寸。" }
-            var sampleSize = 1
-            while (maxOf(pixelSize.width, pixelSize.height) / sampleSize > MAX_OUTPUT_SIDE) sampleSize *= 2
+            requireNotNull(pixelSize) { "The project has no dimensions for this mask PNG." }
             val options = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -362,12 +387,9 @@ internal class PreviewCompositeRenderer(private val context: Context) {
             }
             return context.contentResolver.openInputStream(uri)?.use { input ->
                 BitmapFactory.decodeStream(input, null, options)
-            } ?: throw IllegalArgumentException("无法解码项目蒙版 PNG 文件。")
+            } ?: throw IllegalArgumentException("Could not decode the project mask PNG.")
         }
 
-        companion object {
-            private const val MAX_MASK_CACHE_BYTES = 16L * 1024 * 1024
-        }
     }
 
     private fun reportProgress(completed: Int, total: Int, onProgress: (Int, Int) -> Unit) {
@@ -375,14 +397,24 @@ internal class PreviewCompositeRenderer(private val context: Context) {
     }
 
     companion object {
-        private const val MAX_OUTPUT_SIDE = 2048
         private const val PROGRESS_INTERVAL = 24
-        private const val NORMAL_BLEND_MODE = "Normal"
         private val MASK_ALPHA_FILTER = ColorMatrixColorFilter(ColorMatrix(floatArrayOf(
             0f, 0f, 0f, 0f, 1f,
             0f, 0f, 0f, 0f, 1f,
             0f, 0f, 0f, 0f, 1f,
             1f, 0f, 0f, 0f, 0f
         )))
+
+        /** These are the seven first-release modes; other valid Mac modes remain explicit limits. */
+        private fun canvasBlendMode(name: String): BlendMode? = when (name) {
+            "Normal" -> BlendMode.SRC_OVER
+            "Darken" -> BlendMode.DARKEN
+            "Multiply" -> BlendMode.MULTIPLY
+            "Lighten" -> BlendMode.LIGHTEN
+            "Screen" -> BlendMode.SCREEN
+            "Overlay" -> BlendMode.OVERLAY
+            "Difference" -> BlendMode.DIFFERENCE
+            else -> null
+        }
     }
 }

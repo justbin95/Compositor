@@ -10,10 +10,10 @@ internal object PreviewLiveMaskPlanner {
         val seen = HashSet<String>()
         var currentId: String? = sourceId
         while (currentId != null) {
-            require(result.size < MAX_MASK_DEPTH) { "剪贴蒙版链接层级过深。" }
-            require(seen.add(currentId)) { "剪贴蒙版链接形成循环。" }
+            require(result.size < MAX_MASK_DEPTH) { "The clipping mask chain is too deep." }
+            require(seen.add(currentId)) { "The clipping mask chain contains a cycle." }
             val layer = layersById[currentId]
-                ?: throw IllegalArgumentException("剪贴蒙版引用的图层不存在。")
+                ?: throw IllegalArgumentException("A layer referenced by the clipping mask does not exist.")
             result += layer
             currentId = layer.maskSourceId
         }
