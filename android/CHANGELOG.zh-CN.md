@@ -4,7 +4,7 @@
 
 ## 2026-10-11：ADB 修复与继续开发（待本地同签名构建）
 
-接续文档提交 `79b96e828ddbf6e99017cd659d90f6ecc34bae2d`；旧业务基线 `3a768ac696cdb4efafa1f04c73a22414b4065a33`。本轮源码提交与实际检查见[修复验证记录](validation/adb-fixes-20261011.zh-CN.md)。日期按 Asia/Hong_Kong。
+接续文档提交 `79b96e828ddbf6e99017cd659d90f6ecc34bae2d`；旧业务基线 `3a768ac696cdb4efafa1f04c73a22414b4065a33`。本轮业务源码提交 `697bb7af14c341f005c455efdc4dea8e88241f89`；实际检查见[修复验证记录](validation/adb-fixes-20261011.zh-CN.md)。日期按 Asia/Hong_Kong。
 
 - 修复图片新项目导入的 manifest：位置为 `{x,y}`，尺寸为 `{width,height}`；继续使用严格生产读取器。
 - 项目 ZIP 允许根目录的普通 `README.md`、`README.zh-CN.md`，每个最多 64 KiB。继续校验路径、类型、重复、单根、实际长度、CRC 和总解压预算；不接受任意附加文件。
