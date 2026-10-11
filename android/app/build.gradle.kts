@@ -30,6 +30,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -66,6 +67,10 @@ android {
         enableV4Signing = false
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     packaging {
         jniLibs.useLegacyPackaging = useInstallerCompatibilityPackaging
     }
@@ -81,4 +86,7 @@ android {
 dependencies {
     implementation(project(":editor-core"))
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

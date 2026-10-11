@@ -69,7 +69,6 @@
     <string name="brush_stroke_cancelled_status">The unfinished brush stroke was discarded.</string>
     <string name="brush_layer_unavailable_status">Choose a visible raster layer with a supported preview before using the brush.</string>
     <string name="brush_edit_failed_status">The brush stroke was not applied: %1$s</string>
-    <string name="brush_generic_failure_reason">project access may have changed or the current edit memory budget may be full.</string>
     <string name="canvas_project_description">Project canvas preview. Drag to pan, pinch to zoom, and double tap to reset.</string>
     <string name="canvas_layer_description">Layer preview for %1$s. Only this layer is shown; masks and other effects are not applied. Use the Brush button for temporary source-pixel edits. Drag to pan, pinch to zoom, and double tap to reset in Navigate mode.</string>
     <string name="canvas_composite_description">Project composite preview. %1$s Drag to pan, pinch to zoom, and double tap to reset.</string>
@@ -96,19 +95,13 @@
     <string name="layer_image_missing_status">The project image for “%1$s” could not be found.</string>
     <string name="layer_preview_loading_status">Decoding the PNG for “%1$s”…</string>
     <string name="layer_png_export_choose_status">Choose where to create a separate PNG copy of this layer.</string>
-    <string name="layer_png_exporting_status">Exporting “%1$s” as a PNG…</string>
     <string name="layer_png_export_complete_status">Exported “%1$s” as a separate PNG. The .comp project was not changed.</string>
     <string name="layer_png_export_cancelled_status">PNG export was cancelled.</string>
     <string name="layer_png_export_failed_status">Could not export the layer PNG: %1$s</string>
-    <string name="layer_png_export_failed_generic">The selected document could not be written.</string>
-    <string name="layer_png_export_memory_failed">There was not enough memory to export this layer PNG.</string>
     <string name="project_copy_choose_status">Choose a separate destination for an edited .comp.zip copy. The source project folder will stay unchanged.</string>
-    <string name="project_copy_writing_status">Writing the Compositor project ZIP copy…</string>
     <string name="project_copy_complete_status">Saved an edited .comp.zip copy. It contains committed brush edits; the source project is unchanged.</string>
     <string name="project_copy_cancelled_status">Project copy creation was cancelled.</string>
     <string name="project_copy_failed_status">Could not save the project copy: %1$s</string>
-    <string name="project_copy_failed_generic">The selected document could not be written.</string>
-    <string name="project_copy_memory_failed">There was not enough memory to write the project copy.</string>
     <string name="layer_preview_loaded_status">Showing the source PNG for “%1$s”. Brush edits have up to 20 undo and redo steps and can be saved in an edited .comp.zip copy. Masks and effects are not applied; the source folder is not changed.</string>
     <string name="layer_preview_loaded_no_brush_status">Showing the source PNG for “%1$s”. This layer is not eligible for the temporary brush preview; the project file remains unchanged.</string>
     <string name="layer_row_subtitle">%1$s  ·  %2$s</string>
@@ -122,4 +115,12 @@
     <string name="layer_kind_empty_with_mask">Empty Layer · With Mask</string>
     <string name="layer_kind_generic">Layer</string>
     <string name="layers_title">Layers (Top to Bottom)</string>
+    <string name="new_project_option">New Project</string>
+    <string name="new_project_width">Width (pixels)</string>
+    <string name="new_project_height">Height (pixels)</string>
+    <string name="new_project_resolution">Resolution (ppi)</string>
+    <string name="new_project_create">Create</string>
+    <string name="new_project_transparent_note">Transparent background. Use Save Copy to keep the project; automatic recovery is not available yet.</string>
+    <string name="new_project_invalid_status">Choose positive dimensions up to 30000 pixels per side and 100 million pixels total, and a resolution from 1 to 9600 ppi.</string>
+    <string name="new_project_creating_status">Creating a transparent project…</string>
 </resources>

@@ -59,7 +59,7 @@ internal class CompProjectArchiveWriter(private val resolver: ContentResolver) {
                     val edited = editedAssets[asset.name]
                     if (edited != null) {
                         val limited = LimitedEntryOutputStream(zip, MAX_ASSET_BYTES)
-                        edited.writePng(limited)
+                        edited.writePng(limited, isCancelled)
                         limited.flush()
                     } else {
                         val input = resolver.openInputStream(asset.uri)

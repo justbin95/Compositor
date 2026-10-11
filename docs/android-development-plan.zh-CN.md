@@ -369,7 +369,7 @@ Codex用通俗中文汇报四件事：
 | 静态检查 | `./gradlew :app:lintDebug` | 查常见安卓代码与资源问题 |
 | 设备检查 | `./gradlew :app:connectedDebugAndroidTest` | 已连接设备上的功能检查 |
 
-目前已有 `:editor-core` 纯Kotlin模型模块，以及 `android/native/` 下的NDK ARM64入口；`:app:assembleDebug` 已实际编译并打包 `arm64-v8a/libcompositor_editor.so`。固定像素输出尚未检查，模型/预算测试未增加或运行。`connectedDebugAndroidTest`仍无测试实现和连接设备；新增模型测试后运行 `:editor-core:testDebugUnitTest`，C算法像素检查仍需独立入口。
+目前已有 `:editor-core` 纯Kotlin模型模块及单测、app规则/生产文件管线/生命周期单测，以及 `android/native/` 下的NDK ARM64入口；`:app:assembleDebug` 已实际编译并打包 `arm64-v8a/libcompositor_editor.so`。本轮已加入PNG完整性/像素、固定预算和历史检查，最终实际统计见15.0与修复验证；JNI固定像素输出仍待检查。`connectedDebugAndroidTest`仍无测试实现和连接设备；新增模型测试后运行 `:editor-core:testDebugUnitTest`，C算法像素检查仍需独立入口。
 
 首次构建验证Gradle Wrapper来源与完整性，固定SDK、NDK、JDK和插件版本；禁止将本地SDK绝对路径、账号密码或签名密钥提交到仓库。云环境优先单构建任务，监控剩余磁盘，不盲目下载模拟器镜像。
 
@@ -453,7 +453,7 @@ Codex自行完成：目录结构、依赖版本、普通界面细节、算法移
 
 ### 14.4 下一轮最高优先级：ADB失败修复（2026-10-11）
 
-本轮用户授权仅更新文档与提交，不修改业务代码。所有修复均未实施；不得将临时构建或旧APK验收记作修复通过。修复先于追加图层、新建、Compose/GPU及后续新功能。
+上一轮仅授权文档与提交，未实施修复。本轮已授权实施并推进；ADB-FIX-01～03已落代码，预算诊断与透明新建继续推进。最新代码/自动检查/设备边界见15.0与[修复验证](../android/validation/adb-fixes-20261011.zh-CN.md)。下表保留验收门槛，不以旧APK或自动检查替代设备通过。
 
 | 顺序 / 编号 | 优先级 | 计划 | 验收门槛 |
 | --- | --- | --- | --- |
@@ -465,6 +465,18 @@ Codex自行完成：目录结构、依赖版本、普通界面细节、算法移
 实施方案、包哈希、导出时间线与报告状态见[ADB复核与修复计划](../android/validation/adb-results-20261011.zh-CN.md)。顺序：修复前两项及被阻断回归→收敛导出完整性→预算诊断→恢复原基础链路及第16节Mac对齐。设备结果必须对应修复后的提交、APK与固定证书；原34项结果不整体升级为通过。
 
 ## 15. 开发进度与接续记录（每次开发后更新）
+
+### 15.0 本轮最新快照（2026-10-11，ADB修复实施）
+
+- 接续79b96e8；无已有工作区改动，现有仓库快进更新，没有重置、重建或应用旧patch。
+- 已实现：ADB-FIX-01导入manifest对象契约；ADB-FIX-02根README普通文件64KiB窄范围兼容；ADB-FIX-03独立导出任务/结果跨Activity、临时完整编码后发布、实际取消与删除失败反馈。图层/整图/ZIP共用修复，配置变化策略为继续。ADB-FIX-04显示实际画笔错误，固定预算/历史诊断已加入。
+- 继续开发：NEW-01透明画布新建，像素宽高/PPI、动态预算、取消/失败保护、生产读取器与资产预检；保存仍使用现有Save Copy。背景选项、预设、文档级历史、安全文件夹保存与自动恢复保持未完成。
+- 自动检查：app25/core12项JVM单测全部通过；两项ImageDecoder设备仪器测试编译通过但未运行；Kotlin/ARM64构建和Lint通过（0错误/7警告），diff检查通过。见[本轮验证](../android/validation/adb-fixes-20261011.zh-CN.md)。自动Activity重建与中断机制复现不等于原设备受控复现。
+- 设备/独立复核：原报告34项状态与原附件哈希独立核验结论不变；新代码没有新设备结果。用户此前跳过旋转验收，保持待重新安排；adb设备为空，无Mac。
+- APK：用户选择本地原密钥构建；云端未生成/交付APK。默认INSTALL01兼容打包和固定证书不变，新包需记录新源码提交与APK哈希再验收。
+- 下一步：追加图片图层与资源所有权/失败回滚；补新建背景/预设及文档历史；安全保存/内部恢复、分块合成、绘画工具及全部Mac对齐按16节继续。下方历史快照和工作表的旧“未开始/未测”不覆盖本轮新增自动证据，完整工作包仍未验收。
+- 更新日志：[android/CHANGELOG.zh-CN.md](../android/CHANGELOG.zh-CN.md)。不重发相同comp，不触碰三个旧打包ZIP。
+
 
 ### 15.1 当前快照
 
@@ -487,7 +499,7 @@ Codex自行完成：目录结构、依赖版本、普通界面细节、算法移
 - INSTALL-01最新：用户确认IO-02仍无法安装，恢复排查；暂时不能连接电脑。旧版15与IO-02证书、Manifest相同且ZIP完整；原生ELF两者均仅4KB LOAD对齐（此前16KB检查仅指APK ZIP布局）。已开启NDK flexible page sizes修正16KB ELF布局，并用固定证书v1/v2/v3及可选压缩native/安装提取方式生成兼容候选。构建、ZIP/Manifest/DEX、签名、ELF布局和diff检查通过；用户随后确认INSTALL01可以安装，安装记为设备通过。多个兼容措施同时改动，具体根因未隔离。后续默认使用该成功打包方式及固定签名。新产物`android/app/build/outputs/apk/debug/Compositor-Android-INSTALL01.apk`，3,089,975字节，SHA-256 `6ad11d88351fc5e55a8c7db6141d0ebe0986501d21717eb471821246a09904a5`。5个DEX及资源与IO-02完全相同；安装已通过，继续合并功能测试。不再要求上传失败APK，详情见[安装诊断](../android/validation/installation-diagnostics.zh-CN.md)。 默认构建未传兼容参数也通过（56任务：2执行/54最新），app-debug.apk与已验收INSTALL01逐字节一致；签名与diff检查通过，本轮未运行功能测试。
 - 本地设备交接：用户计划让本地Codex通过ADB执行IO-02合并清单。已准备[交接说明](../android/validation/local-codex-adb-handoff.zh-CN.md)、[结果模板](../android/validation/adb-result-template.zh-CN.md)；本轮源码/文档纳入GitHub work后可直接clone/pull。原离线patch包仅保留历史备份，拉新work后不再叠加旧patch；APK/密钥不提交。本地结果已回传，最新状态见14.4及ADB复核记录；历史交接时状态为待验证；收到逐项截图/日志/实际输出后再更新状态。
 - 内存预算：单个图层编辑会话把给定预算划分为分块缓存、历史像素快照与活动笔画余量；历史最多20项，快照按字节计并在新记录提交时淘汰最旧记录。PNG导出按16行解码条带和单个输出行处理；ZIP打包按64KiB缓冲逐文件流式复制。ZIP导入受单项/总量及文件数上限约束，但完整压缩归档与解压缓存同时存在；Bitmap解码/PNG编码、Zip deflater、解压速度和外部文件提供方缓存峰值均未测量。多图层会话汇总占用和4K使用仍未经Fold/平板测量，不承诺无OOM或实时性能。
-- 关键差距：应用仍是有限Bitmap预览和稀疏源图层笔迹，不是完整绘画器。图片作为新项目导入及预算内整图PNG/JPEG导出已接入；追加图片成为现有项目图层、超预算缩小导入、新建画布、橡皮/取色/压感、变换与图层操作、文档级合并历史、自动恢复、`.comp`文件夹安全保存、DPI导出元数据、分享和大图分块合成尚未完成。PNG/JPEG像素、方向、归档结构、设备及Mac检查待测，基础链路目前代码贯通，不等于验收完成。
+- 关键差距：应用仍是有限Bitmap预览和稀疏源图层笔迹，不是完整绘画器。图片作为新项目导入及预算内整图PNG/JPEG导出已接入；追加图片成为现有项目图层、超预算缩小导入、新建画布、橡皮/取色/压感、变换与图层操作、文档级合并历史、自动恢复、`.comp`文件夹安全保存、DPI导出元数据、分享和大图分块合成尚未完成。PNG/JPEG原报告与本轮自动像素/方向/归档检查分别见15.0；新包设备及Mac检查待测，基础链路代码贯通不等于验收完成。
 - 下一步：优先实施14.4的ADB-FIX-01/02，随后受控复现并修复图层PNG导出生命周期与清理；修复完成后再继续追加图层、新建、安全保存/恢复和分块合成。保持统一签名，区分新APK验证与旧报告通过；Mac与未执行设备项不升级状态。
 - 接续环境：云端Linux x86-64；本轮使用JDK21、Android SDK Platform/Build Tools36、NDK27.2.12479018、CMake3.22.1、Gradle9.6.0/AGP9.4.0；JDK与SDK放在仓库外的用户目录，未写入仓库。`android/build`产物不进Git。
 - 详细历史：[本地开发历史](../android/validation/development-history.zh-CN.md)。DEV-02～07为旧记录编号，统一映射见下表。

@@ -15,7 +15,10 @@ import java.util.UUID
 import java.util.concurrent.CancellationException
 
 /** Imports an oriented PNG/JPEG into a private one-layer project without changing the source. */
-internal class ProjectImageImporter(private val context: Context) {
+internal class ProjectImageImporter(
+    private val context: Context,
+    private val captureBudget: () -> AndroidRasterBudget = { AndroidRasterBudget.capture(context) }
+) {
     fun read(uri: Uri, isCancelled: () -> Boolean): CompProjectReader.Project {
         fun checkCancelled() {
             if (isCancelled()) throw CancellationException("Image import was cancelled.")
@@ -40,7 +43,7 @@ internal class ProjectImageImporter(private val context: Context) {
                     }
                 }
             } ?: throw IllegalArgumentException("Could not read the selected image.")
-            val budget = AndroidRasterBudget.capture(context)
+            val budget = captureBudget()
             decoded = ImageDecoder.decodeBitmap(ImageDecoder.createSource(source)) { decoder, info, _ ->
                 require(info.mimeType == "image/png" || info.mimeType == "image/jpeg") { "Choose a PNG or JPEG image." }
                 require(!info.isAnimated) { "Animated images are not supported." }
@@ -83,16 +86,7 @@ internal class ProjectImageImporter(private val context: Context) {
                     }
                 }
             }
-            val transform = JSONObject().put("origin", JSONArray().put(0).put(0))
-                .put("size", JSONArray().put(image.width).put(image.height))
-                .put("rotation", 0).put("flipX", false).put("flipY", false).put("sampling", "High quality")
-            val layer = JSONObject().put("id", layerId).put("name", "Imported Image")
-                .put("isVisible", true).put("isGroup", false).put("opacity", 1)
-                .put("blendMode", "Normal").put("imageFile", "$layerId.png").put("transform", transform)
-            val manifest = JSONObject().put("format", "com.compositor.project").put("version", 11)
-                .put("colorSpace", "sRGB").put("documentID", UUID.randomUUID().toString().uppercase(Locale.ROOT))
-                .put("width", image.width).put("height", image.height).put("resolution", 72)
-                .put("activeLayerID", layerId).put("layers", JSONArray().put(layer))
+            val manifest = importedImageManifest(layerId, image.width, image.height)
             File(packageRoot, "manifest.json").writeText(manifest.toString(), Charsets.UTF_8)
             checkCancelled()
             check(source.delete()) { "Could not clean up the imported source image." }
@@ -103,6 +97,21 @@ internal class ProjectImageImporter(private val context: Context) {
         } finally {
             normalized?.let { if (it !== decoded) it.recycle() }
             decoded?.recycle()
+        }
+    }
+
+    companion object {
+        internal fun importedImageManifest(layerId: String, width: Int, height: Int): JSONObject {
+            val transform = JSONObject().put("origin", JSONObject().put("x", 0).put("y", 0))
+                .put("size", JSONObject().put("width", width).put("height", height))
+                .put("rotation", 0).put("flipX", false).put("flipY", false).put("sampling", "High quality")
+            val layer = JSONObject().put("id", layerId).put("name", "Imported Image")
+                .put("isVisible", true).put("isGroup", false).put("opacity", 1)
+                .put("blendMode", "Normal").put("imageFile", "$layerId.png").put("transform", transform)
+            return JSONObject().put("format", "com.compositor.project").put("version", 11)
+                .put("colorSpace", "sRGB").put("documentID", UUID.randomUUID().toString().uppercase(Locale.ROOT))
+                .put("width", width).put("height", height).put("resolution", 72)
+                .put("activeLayerID", layerId).put("layers", JSONArray().put(layer))
         }
     }
 }

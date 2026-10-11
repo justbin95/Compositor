@@ -15,6 +15,8 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.EditText
+import android.text.InputType
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -65,7 +67,7 @@ class MainActivity : Activity() {
     private var pendingLayerExport: PendingLayerExport? = null
     private var pendingProjectArchive: PendingProjectArchive? = null
     private var pendingCanvasExport: PendingCanvasExport? = null
-    private var canvasExportJob: CanvasExportJob? = null
+    private var exportTask: ExportTask? = null
     private var exportFlowActive = false
     private var projectOpenInProgress = false
 
@@ -76,8 +78,8 @@ class MainActivity : Activity() {
         pendingLayerExport = retained?.pendingExport
         pendingProjectArchive = retained?.pendingProjectArchive
         pendingCanvasExport = retained?.pendingCanvasExport
-        canvasExportJob = retained?.canvasExportJob
-        exportFlowActive = pendingLayerExport != null || pendingProjectArchive != null || pendingCanvasExport != null || canvasExportJob != null
+        exportTask = retained?.exportTask
+        exportFlowActive = pendingLayerExport != null || pendingProjectArchive != null || pendingCanvasExport != null || exportTask?.result == null && exportTask != null
         if (retained == null) cleanupOrphanedArchiveImports()
         buildHome()
         if (exportFlowActive) updateExportFlowControls()
@@ -95,7 +97,7 @@ class MainActivity : Activity() {
             else if (selectedProjectIsArchive) loadProjectArchive(restoredUri, restoringState = true)
             else loadProjectFolder(restoredUri, restoringState = true)
         }
-        canvasExportJob?.let(::monitorCanvasExport)
+        exportTask?.let(::monitorExportTask)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -110,19 +112,21 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         previewRequestId.incrementAndGet()
         projectOpenRequestId.incrementAndGet()
-        canvasExportJob?.cancelled?.set(true)
+        if (!isChangingConfigurations) exportTask?.cancel()
         worker.shutdownNow()
         if (::canvasPreviewView.isInitialized) canvasPreviewView.clear(getString(R.string.choose_project_status))
         if (!isChangingConfigurations) {
-            clearLayerEditingSessions()
-            currentProject?.archiveCacheDirectory?.deleteRecursively()
+            val sessions = layerEditingSessions.values.toList()
+            val cache = currentProject?.archiveCacheDirectory
+            val release = { sessions.forEach { it.close() }; cache?.deleteRecursively(); Unit }
+            exportTask?.releaseWhenFinished(release) ?: release()
         }
         super.onDestroy()
     }
 
     override fun onRetainNonConfigurationInstance(): Any =
         RetainedLayerSessions(layerEditingSessions, pendingLayerExport, pendingProjectArchive, currentProject,
-            pendingCanvasExport, canvasExportJob)
+            pendingCanvasExport, exportTask)
 
     private fun buildHome() {
         val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -186,10 +190,10 @@ class MainActivity : Activity() {
         canvasPreviewView.onBrushStrokeCancelled = {
             statusText.text = getString(R.string.brush_stroke_cancelled_status)
         }
-        canvasPreviewView.onBrushError = {
+        canvasPreviewView.onBrushError = { reason ->
             statusText.text = getString(
                 R.string.brush_edit_failed_status,
-                getString(R.string.brush_generic_failure_reason)
+                reason
             )
             brushButton.isSelected = false
             navigateButton.isSelected = true
@@ -267,7 +271,7 @@ class MainActivity : Activity() {
         exportCanvasButton.contentDescription = getString(R.string.canvas_tool_export_canvas_accessibility)
         canvasToolRow.addView(exportCanvasButton)
         cancelExportButton = toolButton(getString(R.string.canvas_export_cancel_button)) {
-            canvasExportJob?.cancelled?.set(true)
+            exportTask?.cancel()
             cancelExportButton.isEnabled = false
         }
         canvasToolRow.addView(cancelExportButton)
@@ -356,6 +360,7 @@ class MainActivity : Activity() {
     }
 
     private fun chooseProjectSource() {
+        if (exportTask?.result != null) exportTask = null
         if (layerEditingSessions.values.any { it.hasCommittedChanges }) {
             AlertDialog.Builder(this).setTitle(R.string.open_unsaved_title)
                 .setMessage(R.string.open_unsaved_message)
@@ -370,15 +375,103 @@ class MainActivity : Activity() {
             .setItems(arrayOf(
                 getString(R.string.open_project_folder_option),
                 getString(R.string.open_project_archive_option),
-                getString(R.string.open_image_option)
+                getString(R.string.open_image_option),
+                getString(R.string.new_project_option)
             )) { _, choice ->
                 when (choice) {
                     0 -> chooseProjectFolder()
                     1 -> chooseProjectArchive()
-                    else -> chooseImage()
+                    2 -> chooseImage()
+                    else -> showNewProjectDialog()
                 }
             }
             .show()
+    }
+
+    private fun showNewProjectDialog() {
+        val fields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        fun numberField(label: Int, value: String, decimal: Boolean = false): EditText {
+            fields.addView(text(getString(label), 16, primaryText))
+            return EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER or (if (decimal) InputType.TYPE_NUMBER_FLAG_DECIMAL else 0)
+                setText(value)
+                contentDescription = getString(label)
+                minHeight = dp(48)
+                fields.addView(this)
+            }
+        }
+        val width = numberField(R.string.new_project_width, "1024")
+        val height = numberField(R.string.new_project_height, "1024")
+        val resolution = numberField(R.string.new_project_resolution, "72", decimal = true)
+        fields.addView(text(getString(R.string.new_project_transparent_note), 14, secondaryText))
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.new_project_option).setView(fields)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.new_project_create, null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val w = width.text.toString().toIntOrNull()
+                val h = height.text.toString().toIntOrNull()
+                val ppi = resolution.text.toString().toDoubleOrNull()
+                if (w == null || h == null || ppi == null || w !in 1..30000 || h !in 1..30000 ||
+                    !ppi.isFinite() || ppi !in 1.0..9600.0 || w.toLong() * h > 100_000_000L) {
+                    statusText.text = getString(R.string.new_project_invalid_status)
+                } else {
+                    dialog.dismiss()
+                    createBlankProject(w, h, ppi)
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun createBlankProject(width: Int, height: Int, resolution: Double) {
+        val request = projectOpenRequestId.incrementAndGet()
+        setProjectOpenActive(true)
+        statusText.text = getString(R.string.new_project_creating_status)
+        worker.execute {
+            var candidate: CompProjectReader.Project? = null
+            var failure: String? = null
+            val cancelled = { request != projectOpenRequestId.get() || isFinishing || isDestroyed || Thread.currentThread().isInterrupted }
+            try {
+                val project = BlankProjectCreator(applicationContext).create(width, height, resolution, cancelled)
+                candidate = project
+                validateProjectAssets(project) { cancelled() }
+            } catch (error: Exception) {
+                candidate?.archiveCacheDirectory?.deleteRecursively()
+                candidate = null
+                failure = error.message ?: getString(R.string.project_open_failed_status)
+            } catch (_: OutOfMemoryError) {
+                candidate?.archiveCacheDirectory?.deleteRecursively()
+                candidate = null
+                failure = getString(R.string.project_open_memory_failure_status)
+            }
+            val completed = candidate
+            runOnUiThread {
+                if (cancelled()) {
+                    completed?.archiveCacheDirectory?.deleteRecursively()
+                    return@runOnUiThread
+                }
+                setProjectOpenActive(false)
+                if (completed == null) {
+                    statusText.text = getString(R.string.project_open_preserved_status, failure.orEmpty())
+                    return@runOnUiThread
+                }
+                val previousCache = currentProject?.archiveCacheDirectory
+                previewRequestId.incrementAndGet()
+                canvasPreviewView.clear(getString(R.string.choose_project_status))
+                clearLayerEditingSessions()
+                previousCache?.deleteRecursively()
+                selectedProjectUri = completed.sourceUri
+                selectedProjectIsArchive = false
+                selectedProjectIsImage = false
+                selectedLayerId = completed.activeLayerId
+                savedLayerScrollPosition = 0
+                showProject(completed)
+            }
+        }
     }
 
     private fun chooseImage() {
@@ -659,7 +752,7 @@ class MainActivity : Activity() {
                                     val totalLayers = resources.getQuantityString(
                                         R.plurals.raster_layer_count, total, total
                                     )
-                                    statusText.text = getString(R.string.composite_progress_status, completed, totalLayers)
+                                    if (exportTask == null) statusText.text = getString(R.string.composite_progress_status, completed, totalLayers)
                                 }
                             }
                         }
@@ -697,6 +790,7 @@ class MainActivity : Activity() {
                     updateCanvasTools()
                     statusText.text = message
                 }
+                exportTask?.takeIf { it.result != null }?.let(::monitorExportTask)
             }
         }
     }
@@ -780,6 +874,7 @@ class MainActivity : Activity() {
                     updateCanvasTools(layer)
                     statusText.text = message
                 }
+                exportTask?.takeIf { it.result != null }?.let(::monitorExportTask)
             }
         }
     }
@@ -810,8 +905,8 @@ class MainActivity : Activity() {
         saveProjectCopyButton.isEnabled = currentProject != null && !busy
         exportCanvasButton.isEnabled = currentProject != null && !busy
         compositeButton.isEnabled = currentProject != null && !busy
-        cancelExportButton.visibility = if (canvasExportJob != null) View.VISIBLE else View.GONE
-        cancelExportButton.isEnabled = canvasExportJob?.cancelled?.get() == false
+        cancelExportButton.visibility = if (exportTask?.result == null && exportTask != null) View.VISIBLE else View.GONE
+        cancelExportButton.isEnabled = exportTask?.cancellationRequested == false
         navigateButton.text = getString(
             if (canvasPreviewView.isBrushMode) R.string.canvas_tool_navigate
             else R.string.canvas_tool_navigate_active
@@ -827,6 +922,7 @@ class MainActivity : Activity() {
     }
 
     private fun requestLayerPngExport() {
+        if (exportTask?.result != null) exportTask = null
         val project = currentProject
         val layer = project?.layers?.firstOrNull { it.id == selectedLayerId }
         val imageUri = layer?.imageFile?.let { file -> project?.imageUris?.get(file) }
@@ -877,6 +973,7 @@ class MainActivity : Activity() {
             val session = layerEditingSessions[layerEditingSessionKey(selectedProjectUri, project, layer)]
             if (session?.hasCommittedChanges == true) file to session else null
         }.toMap()
+        if (exportTask?.result != null) exportTask = null
         pendingCanvasExport = PendingCanvasExport(project, editedAssets, format, quality)
         setExportFlowActive(true)
         statusText.text = getString(R.string.canvas_export_choose_status)
@@ -894,56 +991,64 @@ class MainActivity : Activity() {
     }
 
     private fun startCanvasExport(pending: PendingCanvasExport, targetUri: Uri) {
-        val job = CanvasExportJob()
-        canvasExportJob = job
-        setExportFlowActive(true)
-        // This operation owns its completion state across configuration changes. Destruction cancels
-        // it, and a replacement Activity keeps editing disabled until cleanup has completed.
         val appContext = applicationContext
-        Thread({
-            var deleteTarget = false
-            try {
-                val original = targetUri == pending.project.sourceUri || pending.project.packageAssets.any { it.uri == targetUri }
-                require(!original) { "Choose a separate destination so the source project remains unchanged." }
-                deleteTarget = true
-                require(!isInsideSourcePackage(targetUri, pending.project)) { "Choose a destination outside the source .comp folder." }
-                val output = appContext.contentResolver.openOutputStream(targetUri, "w")
-                    ?: throw IllegalArgumentException("The selected provider could not create the image.")
-                output.use {
-                    CompositeImageExporter(appContext).write(it, pending.project, pending.editedAssets,
-                        pending.format, pending.quality, { job.cancelled.get() }, { job.progress.set(it) })
-                }
-                if (job.cancelled.get()) throw java.util.concurrent.CancellationException("Image export was cancelled.")
-                job.succeeded = true
-            } catch (error: Exception) {
-                job.failure = error.message ?: "The image could not be written."
-            } catch (_: OutOfMemoryError) {
-                job.failure = "There was not enough memory to export this canvas."
-            } finally {
-                if (!job.succeeded && deleteTarget) {
-                    job.cleanupFailed = runCatching { appContext.contentResolver.delete(targetUri, null, null) > 0 }.getOrDefault(false).not()
-                }
-                job.finished = true
-            }
-        }, "compositor-canvas-export").start()
-        monitorCanvasExport(job)
+        startExport(ExportTask(ExportTask.Kind.CANVAS), targetUri, pending.project) { output, cancelled, progress ->
+            CompositeImageExporter(appContext).write(output, pending.project, pending.editedAssets,
+                pending.format, pending.quality, cancelled, progress)
+        }
     }
 
-    private fun monitorCanvasExport(job: CanvasExportJob) {
-        if (isFinishing || isDestroyed || canvasExportJob !== job) return
-        if (!job.finished) {
-            statusText.text = getString(R.string.canvas_export_progress_status, job.progress.get())
-            root.postDelayed({ monitorCanvasExport(job) }, 150L)
+    private fun startExport(
+        task: ExportTask,
+        targetUri: Uri,
+        project: CompProjectReader.Project,
+        encode: (java.io.OutputStream, () -> Boolean, (Int) -> Unit) -> Unit
+    ) {
+        exportTask = task
+        setExportFlowActive(true)
+        val appContext = applicationContext
+        task.start(appContext.cacheDir, {
+            require(targetUri != project.sourceUri && project.packageAssets.none { it.uri == targetUri } &&
+                !isInsideSourcePackage(targetUri, project)) {
+                "Choose a separate destination outside the source project."
+            }
+        }, {
+            appContext.contentResolver.openOutputStream(targetUri, "w")
+                ?: throw IllegalArgumentException("The selected provider could not create the export.")
+        }, {
+            appContext.contentResolver.delete(targetUri, null, null) > 0
+        }, encode)
+        monitorExportTask(task)
+    }
+
+    private fun monitorExportTask(task: ExportTask) {
+        if (isFinishing || isDestroyed || exportTask !== task) return
+        val result = task.result
+        if (result == null) {
+            statusText.text = getString(R.string.canvas_export_progress_status, task.progress.get())
+            root.postDelayed({ monitorExportTask(task) }, 150L)
             return
         }
-        canvasExportJob = null
         setExportFlowActive(false)
-        statusText.text = when {
-            job.succeeded -> getString(R.string.canvas_export_complete_status)
-            job.cancelled.get() -> getString(R.string.canvas_export_cancelled_status)
-            else -> getString(R.string.canvas_export_failed_status, job.failure.orEmpty())
+        statusText.text = when (task.kind) {
+            ExportTask.Kind.LAYER -> when {
+                result.succeeded -> getString(R.string.layer_png_export_complete_status, task.layerName)
+                result.cancelled -> getString(R.string.layer_png_export_cancelled_status)
+                else -> getString(R.string.layer_png_export_failed_status, result.failure.orEmpty())
+            }
+            ExportTask.Kind.CANVAS -> when {
+                result.succeeded -> getString(R.string.canvas_export_complete_status)
+                result.cancelled -> getString(R.string.canvas_export_cancelled_status)
+                else -> getString(R.string.canvas_export_failed_status, result.failure.orEmpty())
+            }
+            ExportTask.Kind.ARCHIVE -> when {
+                result.succeeded -> getString(R.string.project_copy_complete_status)
+                result.cancelled -> getString(R.string.project_copy_cancelled_status)
+                else -> getString(R.string.project_copy_failed_status, result.failure.orEmpty())
+            }
         }
-        if (job.cleanupFailed) statusText.append(" " + getString(R.string.canvas_export_cleanup_failed_status))
+        if (result.cleanupFailed) statusText.append(" " + getString(R.string.canvas_export_cleanup_failed_status))
+        updateCanvasTools()
     }
 
     private fun exportFileName(layerName: String): String {
@@ -954,41 +1059,14 @@ class MainActivity : Activity() {
     }
 
     private fun exportLayerPng(pending: PendingLayerExport, targetUri: Uri) {
-        setExportFlowActive(true)
-        statusText.text = getString(R.string.layer_png_exporting_status, pending.layerName)
-        worker.execute {
-            var outputWasOpened = false
-            var failure: String? = null
-            var succeeded = false
-            try {
-                require(targetUri != pending.sourceUri) {
-                    "Choose a separate document so the source project image stays unchanged."
-                }
-                val output = contentResolver.openOutputStream(targetUri, "w")
-                    ?: throw IllegalArgumentException("The selected document provider could not create the PNG.")
-                outputWasOpened = true
-                output.use { pending.session.writePng(it) }
-                succeeded = true
-            } catch (error: Exception) {
-                failure = error.message ?: getString(R.string.layer_png_export_failed_generic)
-                if (outputWasOpened) runCatching { contentResolver.delete(targetUri, null, null) }
-            } catch (_: OutOfMemoryError) {
-                failure = getString(R.string.layer_png_export_memory_failed)
-                if (outputWasOpened) runCatching { contentResolver.delete(targetUri, null, null) }
-            }
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                setExportFlowActive(false)
-                statusText.text = if (succeeded) {
-                    getString(R.string.layer_png_export_complete_status, pending.layerName)
-                } else {
-                    getString(R.string.layer_png_export_failed_status, failure.orEmpty())
-                }
-            }
+        val project = currentProject ?: return
+        startExport(ExportTask(ExportTask.Kind.LAYER, pending.layerName), targetUri, project) { output, cancelled, progress ->
+            pending.session.writePng(output, cancelled, progress)
         }
     }
 
     private fun requestProjectArchiveExport() {
+        if (exportTask?.result != null) exportTask = null
         val project = currentProject ?: return
         canvasPreviewView.setBrushMode(false)
         val editedAssets = project.layers.mapNotNull { layer ->
@@ -1014,57 +1092,10 @@ class MainActivity : Activity() {
     }
 
     private fun writeProjectArchive(pending: PendingProjectArchive, targetUri: Uri) {
-        setExportFlowActive(true)
-        statusText.text = getString(R.string.project_copy_writing_status)
-        worker.execute {
-            var outputWasOpened = false
-            var shouldDeleteTarget = false
-            var failure: String? = null
-            var succeeded = false
-            try {
-                val isOriginalAsset = targetUri == pending.project.sourceUri ||
-                    pending.project.packageAssets.any { it.uri == targetUri }
-                require(!isOriginalAsset) {
-                    "Choose a separate destination so the source project remains unchanged."
-                }
-                require(!isInsideSourcePackage(targetUri, pending.project)) {
-                    shouldDeleteTarget = true
-                    "Choose a destination outside the source .comp project folder."
-                }
-                val output = contentResolver.openOutputStream(targetUri, "w")
-                    ?: throw IllegalArgumentException("The selected document provider could not create the project ZIP.")
-                outputWasOpened = true
-                shouldDeleteTarget = true
-                output.use {
-                    CompProjectArchiveWriter(contentResolver).write(it, pending.project, pending.editedAssets)
-                }
-                succeeded = true
-            } catch (error: Exception) {
-                failure = error.message ?: getString(R.string.project_copy_failed_generic)
-                if (shouldDeleteTarget || outputWasOpened) runCatching { contentResolver.delete(targetUri, null, null) }
-            } catch (_: OutOfMemoryError) {
-                failure = getString(R.string.project_copy_memory_failed)
-                if (shouldDeleteTarget || outputWasOpened) runCatching { contentResolver.delete(targetUri, null, null) }
-            }
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                setExportFlowActive(false)
-                statusText.text = if (succeeded) {
-                    getString(R.string.project_copy_complete_status)
-                } else {
-                    getString(R.string.project_copy_failed_status, failure.orEmpty())
-                }
-            }
+        val resolver = applicationContext.contentResolver
+        startExport(ExportTask(ExportTask.Kind.ARCHIVE), targetUri, pending.project) { output, cancelled, _ ->
+            CompProjectArchiveWriter(resolver).write(output, pending.project, pending.editedAssets, cancelled)
         }
-    }
-
-    private fun isInsideSourcePackage(targetUri: Uri, project: CompProjectReader.Project): Boolean {
-        if (targetUri.authority != project.sourceUri.authority) return false
-        val sourceId = runCatching { DocumentsContract.getTreeDocumentId(project.sourceUri) }.getOrNull()
-            ?: return false
-        val targetId = runCatching { DocumentsContract.getDocumentId(targetUri) }.getOrNull()
-            ?: return false
-        return targetId == sourceId || targetId.startsWith("${sourceId.trimEnd('/')}/")
     }
 
     private fun setExportFlowActive(active: Boolean) {
@@ -1140,7 +1171,8 @@ class MainActivity : Activity() {
 
     private fun cleanupOrphanedArchiveImports() {
         cacheDir.listFiles()
-            ?.filter { it.isDirectory && it.name.startsWith(ARCHIVE_CACHE_PREFIX) }
+            ?.filter { (it.isDirectory && it.name.startsWith(ARCHIVE_CACHE_PREFIX)) ||
+                (it.isFile && it.name.startsWith("compositor-export-") && it.extension == "tmp") }
             ?.forEach { it.deleteRecursively() }
     }
 
@@ -1188,7 +1220,7 @@ class MainActivity : Activity() {
         val pendingProjectArchive: PendingProjectArchive?,
         val project: CompProjectReader.Project?,
         val pendingCanvasExport: PendingCanvasExport?,
-        val canvasExportJob: CanvasExportJob?
+        val exportTask: ExportTask?
     )
 
     private data class PendingCanvasExport(
@@ -1197,15 +1229,6 @@ class MainActivity : Activity() {
         val format: CompositeImageExporter.Format,
         val quality: Int
     )
-
-    private class CanvasExportJob {
-        val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
-        val progress = AtomicInteger(0)
-        @Volatile var finished = false
-        @Volatile var succeeded = false
-        @Volatile var cleanupFailed = false
-        @Volatile var failure: String? = null
-    }
 
     private inner class LayerListAdapter : BaseAdapter() {
         private var rows: List<LayerRow> = emptyList()
@@ -1276,3 +1299,12 @@ class MainActivity : Activity() {
         private const val ARCHIVE_CACHE_PREFIX = "compositor-import-"
     }
 }
+
+private fun isInsideSourcePackage(targetUri: Uri, project: CompProjectReader.Project): Boolean {
+        if (targetUri.authority != project.sourceUri.authority) return false
+        val sourceId = runCatching { DocumentsContract.getTreeDocumentId(project.sourceUri) }.getOrNull()
+            ?: return false
+        val targetId = runCatching { DocumentsContract.getDocumentId(targetUri) }.getOrNull()
+            ?: return false
+        return targetId == sourceId || targetId.startsWith("${sourceId.trimEnd('/')}/")
+    }

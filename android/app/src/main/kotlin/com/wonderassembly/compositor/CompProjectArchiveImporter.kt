@@ -100,6 +100,10 @@ internal class CompProjectArchiveImporter(
                             require(entry.size in 0..MAX_MANIFEST_BYTES) { "The project manifest exceeds the 4 MiB limit." }
                             sawManifest = true
                         }
+                        "README.md", "README.zh-CN.md" -> {
+                            require(!central.isDirectory) { "The project README is not a file." }
+                            require(entry.size in 0..MAX_README_BYTES) { "The project README exceeds the 64 KiB limit." }
+                        }
                         "images" -> {
                             require(central.isDirectory) { "The project images entry is not a folder." }
                             verifyEmptyDirectoryEntry(zip, entry, isCancelled)
@@ -118,7 +122,11 @@ internal class CompProjectArchiveImporter(
                         }
                     }
                     val declaredSize = entry.size
-                    val maximum = if (relative == "manifest.json") MAX_MANIFEST_BYTES else MAX_ASSET_BYTES
+                    val maximum = when (relative) {
+                        "manifest.json" -> MAX_MANIFEST_BYTES
+                        "README.md", "README.zh-CN.md" -> MAX_README_BYTES
+                        else -> MAX_ASSET_BYTES
+                    }
                     require(declaredSize in 0..maximum) { "A project archive entry exceeds the supported size limit." }
                     val output = safeOutputFile(packageRoot, relative)
                     require(output.parentFile?.isDirectory == true || output.parentFile?.mkdirs() == true) {
@@ -178,7 +186,7 @@ internal class CompProjectArchiveImporter(
             "The project archive contains an unsafe path."
         }
 
-        val isDirectRoot = parts.first() == "manifest.json" || parts.first() == "images"
+        val isDirectRoot = parts.first() == "manifest.json" || parts.first() == "images" || parts.first() in ROOT_README_NAMES
         if (isDirectRoot) {
             require(parts.size <= 2) { "The project archive contains an unexpected path." }
             return ArchivePath(false, "", normalized)
@@ -193,7 +201,7 @@ internal class CompProjectArchiveImporter(
         if (relative.isEmpty()) {
             require(isDirectory) { "The project archive root entry is not a folder." }
         } else {
-            require(relative == "manifest.json" || relative == "images" || relative.startsWith("images/")) {
+            require(relative == "manifest.json" || relative == "images" || relative in ROOT_README_NAMES || relative.startsWith("images/")) {
                 "The project archive contains an unexpected path."
             }
         }
@@ -376,7 +384,9 @@ internal class CompProjectArchiveImporter(
         const val MAX_TOTAL_EXTRACTED_BYTES = 1L * 1024L * 1024L * 1024L
         const val MAX_MANIFEST_BYTES = 4L * 1024L * 1024L
         const val MAX_ASSET_BYTES = 512L * 1024L * 1024L
-        const val MAX_ENTRIES = 20_003
+        const val MAX_ENTRIES = 20_005
+        const val MAX_README_BYTES = 64L * 1024L
+        val ROOT_README_NAMES = setOf("README.md", "README.zh-CN.md")
         const val MAX_ZIP_COMMENT_BYTES = 65_535
         const val EOCD_FIXED_BYTES = 22
         const val ZIP64_U16 = 0xffff

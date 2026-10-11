@@ -50,7 +50,11 @@ internal class LayerEditingSession(
 
     fun closeSource() = source.closeSource()
 
-    fun writePng(output: OutputStream) = source.writePng(output, raster)
+    fun writePng(
+        output: OutputStream,
+        isCancelled: () -> Boolean = { Thread.currentThread().isInterrupted },
+        onProgress: (Int) -> Unit = {}
+    ) = source.writePng(output, raster, isCancelled, onProgress)
 
     /** Replaces committed source chunks, leaving untouched source pixels unchanged. */
     fun applyCommittedChanges(bitmap: Bitmap, isCancelled: () -> Boolean, fullResolution: Boolean = true) {
@@ -141,7 +145,7 @@ private class ProjectPngTileSource(
         }
     }
 
-    fun writePng(output: OutputStream, raster: ChunkedRaster) {
+    fun writePng(output: OutputStream, raster: ChunkedRaster, isCancelled: () -> Boolean, onProgress: (Int) -> Unit) {
         require(raster.width == width && raster.height == height) {
             "The edited raster dimensions do not match the source image."
         }
@@ -156,7 +160,7 @@ private class ProjectPngTileSource(
         var stripHeight = 0
         try {
             ReferencePngWriter.writeRgba8PremultipliedRows(output, width, height) { y, row ->
-                check(!Thread.currentThread().isInterrupted) { "PNG export was cancelled." }
+                if (isCancelled()) throw java.util.concurrent.CancellationException("PNG export was cancelled.")
                 if (stripBitmap == null || y < stripTop || y >= stripTop + stripHeight) {
                     stripBitmap?.recycle()
                     stripTop = y
@@ -188,6 +192,7 @@ private class ProjectPngTileSource(
                     destinationIndex += PixelBufferLayout.BYTES_PER_PIXEL
                 }
                 raster.copyCommittedRowOnto(y, row)
+                if (y % 32 == 0) onProgress((y + 1) * 90 / height)
             }
         } finally {
             stripBitmap?.recycle()
