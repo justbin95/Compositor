@@ -41,3 +41,7 @@
 后续默认采用成功组合：压缩native/安装提取、16KB ELF LOAD对齐、固定证书v1/v2/v3。`compositor.installerCompatibility`默认改为true，普通assembleDebug不需额外参数；false仅保留为未验收的直接加载诊断开关，不作为后续默认发包方式。原失败包留存，不再要求用户为此次安装成功重复上传或取日志。继续按IO-02合并清单验收功能。
 
 - 默认配置复核：未传installerCompatibility参数的`:app:assembleDebug --offline`成功（56任务：2执行/54最新）；app-debug.apk与用户成功安装的INSTALL01哈希完全相同，原生ZIP method8，签名证书一致；`git diff --check`通过。未新增/运行功能测试，不重复发同字节APK。
+
+## ADB回传补充（2026-10-11）
+
+本地报告受测APK与INSTALL01哈希相同，应用能运行并完成部分编辑/文件测试；设备PAGE_SIZE=4096。此前设备页大小未知的记录是历史状态。多个兼容措施的各自作用仍未隔离，不据4KB设备推断16KB设备已通过。功能失败/待测范围见[ADB复核与优先修复计划](adb-results-20261011.zh-CN.md)；后续修复继续使用固定证书与默认兼容打包，不改变签名。
