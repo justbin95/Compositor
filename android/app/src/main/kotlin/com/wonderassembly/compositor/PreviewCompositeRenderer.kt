@@ -31,10 +31,18 @@ internal class PreviewCompositeRenderer(private val context: Context) {
     fun render(
         project: CompProjectReader.Project,
         isCancelled: () -> Boolean,
-        onProgress: (completed: Int, total: Int) -> Unit
+        onProgress: (completed: Int, total: Int) -> Unit,
+        fullResolution: Boolean = false,
+        editedAssets: Map<String, LayerEditingSession> = emptyMap()
     ): Result {
-        val rasterBudget = AndroidRasterBudget.capture(context)
-        val outputScale = minOf(1.0, rasterBudget.maxPreviewSide.toDouble() / maxOf(project.width, project.height))
+        val capturedBudget = AndroidRasterBudget.capture(context)
+        // Reserve room for the output, clipping coverage, source, masks and nested saveLayer buffers.
+        val rasterBudget = if (fullResolution) capturedBudget.copy(
+            maxSingleBitmapBytes = capturedBudget.maxSingleBitmapBytes / 2,
+            maxMaskCacheBytes = capturedBudget.maxMaskCacheBytes / 2
+        ) else capturedBudget
+        if (fullResolution) validateExport(project, rasterBudget)
+        val outputScale = if (fullResolution) 1.0 else minOf(1.0, rasterBudget.maxPreviewSide.toDouble() / maxOf(project.width, project.height))
         val outputWidth = (project.width * outputScale).toInt().coerceAtLeast(1)
         val outputHeight = (project.height * outputScale).toInt().coerceAtLeast(1)
         val composite = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
@@ -52,7 +60,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 layer?.adjustment == false && layer.imageFile != null
         }
         val limitations = LinkedHashSet<PreviewLimitation>()
-        val maskBitmaps = MaskBitmapCache(context, rasterBudget)
+        val maskBitmaps = MaskBitmapCache(context, rasterBudget, fullResolution)
         var liveCoverageSourceId: String? = null
         var liveCoverageBitmap: Bitmap? = null
         var processed = 0
@@ -81,7 +89,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 }
                 val uri = project.imageUris[imageFile]
                     ?: throw IllegalArgumentException("The PNG for layer “${layer.name}” does not exist.")
-                val source = decodePreviewBitmap(uri, project.imageSizes[imageFile], rasterBudget)
+                val source = decodePreviewBitmap(uri, project.imageSizes[imageFile], rasterBudget, fullResolution, editedAssets[imageFile], isCancelled)
                 try {
                     val liveCoverage = layer.maskSourceId?.let { sourceId ->
                         if (sourceId != liveCoverageSourceId) {
@@ -90,7 +98,8 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                             liveCoverageSourceId = null
                             liveCoverageBitmap = renderLiveMaskCoverage(
                                 sourceId, project, layersById, effectiveOpacityById,
-                                outputWidth, outputHeight, isCancelled, maskBitmaps, rasterBudget
+                                outputWidth, outputHeight, isCancelled, maskBitmaps, rasterBudget,
+                                fullResolution, editedAssets
                             )
                             liveCoverageSourceId = sourceId
                         }
@@ -128,7 +137,9 @@ internal class PreviewCompositeRenderer(private val context: Context) {
         outputHeight: Int,
         isCancelled: () -> Boolean,
         maskBitmaps: MaskBitmapCache,
-        rasterBudget: AndroidRasterBudget
+        rasterBudget: AndroidRasterBudget,
+        fullResolution: Boolean,
+        editedAssets: Map<String, LayerEditingSession>
     ): Bitmap {
         val coverage = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(coverage)
@@ -148,7 +159,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 val image = if (imageFile != null) {
                     decodePreviewBitmap(
                         imageUri ?: throw IllegalArgumentException("The PNG for clipping mask source “${sourceLayer.name}” does not exist."),
-                        imageSize, rasterBudget
+                        imageSize, rasterBudget, fullResolution, editedAssets[imageFile], isCancelled
                     )
                 } else {
                     null
@@ -306,23 +317,40 @@ internal class PreviewCompositeRenderer(private val context: Context) {
     private fun decodePreviewBitmap(
         uri: android.net.Uri,
         pixelSize: CompProjectReader.PixelSize?,
-        rasterBudget: AndroidRasterBudget
+        rasterBudget: AndroidRasterBudget,
+        fullResolution: Boolean = false,
+        editingSession: LayerEditingSession? = null,
+        isCancelled: () -> Boolean = { false }
     ): Bitmap {
         requireNotNull(pixelSize) { "The project has no dimensions for this PNG." }
-        val sampleSize = rasterBudget.sampleSizeFor(pixelSize.width, pixelSize.height)
+        val sampleSize = if (fullResolution) 1 else rasterBudget.sampleSizeFor(pixelSize.width, pixelSize.height)
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
             inScaled = false
+            inMutable = editingSession?.hasCommittedChanges == true
+            inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
         }
-        return context.contentResolver.openInputStream(uri)?.use { input ->
+        val bitmap = context.contentResolver.openInputStream(uri)?.use { input ->
             BitmapFactory.decodeStream(input, null, options)
         } ?: throw IllegalArgumentException("Could not decode the layer PNG.")
+        try {
+            if (fullResolution) {
+                require(bitmap.width == pixelSize.width && bitmap.height == pixelSize.height) { "The source image dimensions changed." }
+                require(bitmap.allocationByteCount.toLong() <= rasterBudget.maxSingleBitmapBytes) { "The source image exceeds the export memory budget." }
+            }
+            editingSession?.applyCommittedChanges(bitmap, isCancelled, fullResolution)
+            return bitmap
+        } catch (error: Throwable) {
+            bitmap.recycle()
+            throw error
+        }
     }
 
     private class MaskBitmapCache(
         private val context: Context,
-        private val rasterBudget: AndroidRasterBudget
+        private val rasterBudget: AndroidRasterBudget,
+        private val fullResolution: Boolean
     ) {
         private val cached = LinkedHashMap<String, Bitmap>(0, 0.75f, true)
         private val transient = ArrayList<Bitmap>()
@@ -331,7 +359,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
         fun get(file: String, uri: android.net.Uri, pixelSize: CompProjectReader.PixelSize?): Bitmap {
             cached[file]?.let { return it }
             requireNotNull(pixelSize) { "The project has no dimensions for this mask PNG." }
-            val sampleSize = rasterBudget.sampleSizeFor(pixelSize.width, pixelSize.height)
+            val sampleSize = if (fullResolution) 1 else rasterBudget.sampleSizeFor(pixelSize.width, pixelSize.height)
             val expectedBytes =
                 ((pixelSize.width.toLong() + sampleSize - 1) / sampleSize) *
                     ((pixelSize.height.toLong() + sampleSize - 1) / sampleSize) * 4L
@@ -341,6 +369,11 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 }
             }
             val bitmap = decodeMaskBitmap(context, uri, pixelSize, sampleSize)
+            if (fullResolution && (bitmap.width != pixelSize.width || bitmap.height != pixelSize.height ||
+                    bitmap.allocationByteCount.toLong() > rasterBudget.maxSingleBitmapBytes)) {
+                bitmap.recycle()
+                throw IllegalArgumentException("The mask changed or exceeds the export memory budget.")
+            }
             val bytes = bitmap.allocationByteCount.toLong()
             if (bytes > rasterBudget.maxMaskCacheBytes) {
                 transient += bitmap
@@ -384,6 +417,7 @@ internal class PreviewCompositeRenderer(private val context: Context) {
                 inSampleSize = sampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
                 inScaled = false
+                inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
             }
             return context.contentResolver.openInputStream(uri)?.use { input ->
                 BitmapFactory.decodeStream(input, null, options)
@@ -394,6 +428,39 @@ internal class PreviewCompositeRenderer(private val context: Context) {
 
     private fun reportProgress(completed: Int, total: Int, onProgress: (Int, Int) -> Unit) {
         if (completed == total || completed % PROGRESS_INTERVAL == 0) onProgress(completed, total)
+    }
+
+    /** Export must fail explicitly rather than write the preview's skipped features or sampled pixels. */
+    private fun validateExport(project: CompProjectReader.Project, budget: AndroidRasterBudget) {
+        fun checkSize(width: Int, height: Int) {
+            require(width.toLong() * height.toLong() <= budget.maxSingleBitmapBytes / 4L) {
+                "This project exceeds the current full-resolution export memory budget. No reduced-resolution file was exported."
+            }
+        }
+        checkSize(project.width, project.height)
+        val layers = project.layers.associateBy { it.id }
+        val entries = PreviewLayerOrderPlanner.plan(project.layers.map {
+            PreviewLayerOrderPlanner.Node(it.id, it.parentId, it.visible, it.group, it.opacity)
+        })
+        for (entry in entries) {
+            if (!entry.effectivelyVisible || entry.effectiveOpacity <= 0.0) continue
+            val layer = layers.getValue(entry.node.id)
+            require(!layer.adjustment && !layer.hasEffects && canvasBlendMode(layer.blendMode) != null) {
+                "Full-canvas export is unavailable because “${layer.name}” uses an unsupported adjustment, effect or blend mode."
+            }
+            val sources = listOf(layer) + layer.maskSourceId?.let { PreviewLiveMaskPlanner.chain(it, layers) }.orEmpty()
+            for (source in sources) {
+                require(!source.hasEffects && !source.adjustment) { "A clipping source uses an unsupported effect or adjustment." }
+                source.imageFile?.let { file ->
+                    val size = requireNotNull(project.imageSizes[file]) { "Missing image dimensions." }
+                    checkSize(size.width, size.height)
+                }
+                for (mask in PreviewMaskPlanner.forLayer(source, layers)) {
+                    val size = requireNotNull(project.maskSizes[mask.file]) { "Missing mask dimensions." }
+                    checkSize(size.width, size.height)
+                }
+            }
+        }
     }
 
     companion object {

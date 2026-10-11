@@ -10,3 +10,7 @@ android {
         minSdk = 31
     }
 }
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+}

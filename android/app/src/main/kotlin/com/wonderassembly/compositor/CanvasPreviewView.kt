@@ -14,7 +14,13 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.DecelerateInterpolator
+import com.wonderassembly.compositor.core.ChunkedBrushStroke
+import com.wonderassembly.compositor.core.CoordinateMapper
+import com.wonderassembly.compositor.core.PixelSize
 import com.wonderassembly.compositor.core.PointD
+import com.wonderassembly.compositor.core.RasterChunkId
+import com.wonderassembly.compositor.core.RasterChunkSnapshot
+import com.wonderassembly.compositor.core.LayerTransform as CoreLayerTransform
 import com.wonderassembly.compositor.core.ViewportTransform
 import kotlin.math.abs
 import kotlin.math.floor
@@ -41,7 +47,9 @@ internal class CanvasPreviewView(context: Context) : View(context) {
 
     private var project: CompProjectReader.Project? = null
     private var layer: CompProjectReader.Layer? = null
+    private var editingSession: LayerEditingSession? = null
     private var bitmap: Bitmap? = null
+    private val editedTileBitmaps = LinkedHashMap<RasterChunkId, EditedTileBitmap>()
     private var message: String? = null
     private var layerOpacity: Double = 1.0
     private var showingComposite = false
@@ -54,6 +62,16 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     private var previousPinchFocusY: Double? = null
     private var previousPinchSpan: Double? = null
     private var panResetAnimator: ValueAnimator? = null
+    private var brushMode = false
+    private var activeBrushStroke: ChunkedBrushStroke? = null
+
+    internal var onBrushStrokeCommitted: ((String) -> Unit)? = null
+    internal var onBrushStrokeCancelled: (() -> Unit)? = null
+    internal var onBrushError: ((String) -> Unit)? = null
+    internal var onBrushHistoryChanged: (() -> Unit)? = null
+    internal var onBrushHistoryLimitReached: (() -> Unit)? = null
+    internal var onBrushStrokeUndone: (() -> Unit)? = null
+    internal var onBrushStrokeRedone: (() -> Unit)? = null
 
     private val gestureDetector = GestureDetector(context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -88,40 +106,14 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     init {
         setBackgroundColor(dark)
         isClickable = true
-        setOnTouchListener { _, event ->
+        setOnTouchListener { view, event ->
             if (project == null || bitmap == null) {
                 false
             } else {
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        cancelPanResetAnimation()
-                        multiTouchGesture = false
-                        clearPinchBaseline()
-                    }
-                    MotionEvent.ACTION_POINTER_DOWN -> {
-                        multiTouchGesture = true
-                        updatePinchBaseline(event)
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (multiTouchGesture && event.pointerCount >= 2) handlePinchMove(event)
-                    }
-                    MotionEvent.ACTION_POINTER_UP -> {
-                        if (event.pointerCount - 1 >= 2) {
-                            updatePinchBaseline(event, excludedPointerIndex = event.actionIndex)
-                        } else {
-                            clearPinchBaseline()
-                        }
-                    }
-                }
-                gestureDetector.onTouchEvent(event)
+                if (brushMode) handleBrushTouch(event) else handleNavigationTouch(event)
                 if (clickDetected) {
                     clickDetected = false
-                    performClick()
-                }
-                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    multiTouchGesture = false
-                    clearPinchBaseline()
-                    animatePanToOriginAtMinimumZoom()
+                    view.performClick()
                 }
                 true
             }
@@ -132,6 +124,36 @@ internal class CanvasPreviewView(context: Context) : View(context) {
 
     override fun performClick(): Boolean {
         super.performClick()
+        return true
+    }
+
+    internal val isBrushMode: Boolean get() = brushMode
+    internal val canUndoBrushStroke: Boolean
+        get() = activeBrushStroke == null && editingSession?.history?.canUndo == true
+    internal val canRedoBrushStroke: Boolean
+        get() = activeBrushStroke == null && editingSession?.history?.canRedo == true
+
+    internal fun undoBrushStroke(): Boolean = applyBrushHistory(redo = false)
+
+    internal fun redoBrushStroke(): Boolean = applyBrushHistory(redo = true)
+
+    internal fun canEnableBrush(): Boolean {
+        val currentLayer = layer ?: return false
+        val session = editingSession ?: return false
+        return session.canBeginStroke && currentLayer.visible && !currentLayer.group && !currentLayer.adjustment &&
+            currentLayer.imageFile != null && currentLayer.blendMode.equals("Normal", ignoreCase = true) &&
+            currentLayer.opacity > 0.0 && !currentLayer.hasEffects
+    }
+
+    internal fun setBrushMode(enabled: Boolean): Boolean {
+        if (enabled && !canEnableBrush()) return false
+        if (brushMode == enabled) return true
+        if (!enabled) finishBrushStroke(commit = true)
+        brushMode = enabled
+        multiTouchGesture = false
+        clearPinchBaseline()
+        updateContentDescription()
+        invalidate()
         return true
     }
 
@@ -147,6 +169,266 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         if (!scale.isFinite() || scale <= 0.0) return null
         return ViewportTransform(scale, displayed.left, displayed.top).windowToCanvas(PointD(viewX, viewY))
     }
+
+    /** Maps a canvas touch through the selected layer's transform into its original PNG pixels. */
+    internal fun layerPointAtView(viewX: Double, viewY: Double): PointD? {
+        val currentLayer = layer ?: return null
+        val session = editingSession ?: return null
+        val documentPoint = documentPointAtView(viewX, viewY) ?: return null
+        val transform = currentLayer.transform.toCoreTransform()
+        val sourceSize = PixelSize(session.raster.width, session.raster.height)
+        return CoordinateMapper.canvasToLayer(documentPoint, sourceSize, transform).takeIf { point ->
+            point.x in 0.0..sourceSize.width.toDouble() && point.y in 0.0..sourceSize.height.toDouble()
+        }
+    }
+
+    private fun CompProjectReader.LayerTransform.toCoreTransform() = CoreLayerTransform(
+        x = x,
+        y = y,
+        width = width,
+        height = height,
+        clockwiseDegrees = rotation,
+        flipX = flipX,
+        flipY = flipY
+    )
+
+    private fun handleNavigationTouch(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                cancelPanResetAnimation()
+                multiTouchGesture = false
+                clearPinchBaseline()
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                multiTouchGesture = true
+                updatePinchBaseline(event)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (multiTouchGesture && event.pointerCount >= 2) handlePinchMove(event)
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (event.pointerCount - 1 >= 2) {
+                    updatePinchBaseline(event, excludedPointerIndex = event.actionIndex)
+                } else {
+                    clearPinchBaseline()
+                }
+            }
+        }
+        gestureDetector.onTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            multiTouchGesture = false
+            clearPinchBaseline()
+            animatePanToOriginAtMinimumZoom()
+        }
+    }
+
+    private fun handleBrushTouch(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                cancelPanResetAnimation()
+                multiTouchGesture = false
+                clearPinchBaseline()
+                beginBrushStroke(event.x.toDouble(), event.y.toDouble())
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (!multiTouchGesture) {
+                    multiTouchGesture = true
+                    finishBrushStroke(commit = false, notifyCancellation = false)
+                }
+                updatePinchBaseline(event)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (multiTouchGesture && event.pointerCount >= 2) {
+                    handlePinchMove(event)
+                } else if (event.pointerCount == 1) {
+                    continueBrushStroke(event.x.toDouble(), event.y.toDouble())
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (event.pointerCount - 1 >= 2) {
+                    updatePinchBaseline(event, excludedPointerIndex = event.actionIndex)
+                } else {
+                    clearPinchBaseline()
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!multiTouchGesture) {
+                    continueBrushStroke(event.x.toDouble(), event.y.toDouble())
+                    finishBrushStroke(commit = true)
+                }
+                multiTouchGesture = false
+                clearPinchBaseline()
+                animatePanToOriginAtMinimumZoom()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                finishBrushStroke(commit = false)
+                multiTouchGesture = false
+                clearPinchBaseline()
+            }
+        }
+    }
+
+    private fun beginBrushStroke(viewX: Double, viewY: Double) {
+        val session = editingSession ?: return
+        val start = layerPointAtView(viewX, viewY) ?: return
+        try {
+            val stroke = session.raster.beginBrushStroke(
+                diameterPixels = BRUSH_DIAMETER_PIXELS,
+                colorArgb = Color.BLACK
+            )
+            activeBrushStroke = stroke
+            refreshEditedTiles(stroke.addPoint(start))
+            onBrushHistoryChanged?.invoke()
+        } catch (error: Exception) {
+            failBrushStroke(error)
+        } catch (error: OutOfMemoryError) {
+            failBrushStroke(error)
+        }
+    }
+
+    private fun continueBrushStroke(viewX: Double, viewY: Double) {
+        val stroke = activeBrushStroke ?: return
+        try {
+            val point = layerPointAtView(viewX, viewY)
+            if (point == null) {
+                stroke.endSegment()
+            } else {
+                refreshEditedTiles(stroke.addPoint(point))
+            }
+        } catch (error: Exception) {
+            failBrushStroke(error)
+        } catch (error: OutOfMemoryError) {
+            failBrushStroke(error)
+        }
+    }
+
+    private fun finishBrushStroke(commit: Boolean, notifyCancellation: Boolean = true) {
+        val stroke = activeBrushStroke ?: return
+        activeBrushStroke = null
+        val layerName = layer?.name.orEmpty()
+        val touchedChunks = stroke.touchedChunkIds
+        try {
+            if (commit) {
+                val patch = stroke.commit()
+                if (patch != null) {
+                    val session = editingSession
+                    if (session != null && session.history.record(patch)) {
+                        onBrushStrokeCommitted?.invoke(layerName)
+                    } else {
+                        patch.undo()
+                        refreshEditedTiles(patch.changedChunkIds)
+                        onBrushHistoryLimitReached?.invoke()
+                    }
+                }
+            } else {
+                stroke.cancel()
+                refreshEditedTiles(touchedChunks)
+                if (notifyCancellation) onBrushStrokeCancelled?.invoke()
+            }
+            onBrushHistoryChanged?.invoke()
+        } catch (error: Exception) {
+            onBrushError?.invoke(error.message ?: "The brush transaction could not be completed.")
+        } catch (error: OutOfMemoryError) {
+            onBrushError?.invoke("There is not enough memory to finish this brush transaction.")
+        }
+    }
+
+    private fun failBrushStroke(error: Throwable) {
+        val stroke = activeBrushStroke
+        activeBrushStroke = null
+        if (stroke != null) {
+            val touchedChunks = stroke.touchedChunkIds
+            runCatching { stroke.cancel() }
+            runCatching { refreshEditedTiles(touchedChunks) }
+        }
+        brushMode = false
+        onBrushHistoryChanged?.invoke()
+        updateContentDescription()
+        onBrushError?.invoke(error.message ?: "The brush transaction could not be completed.")
+    }
+
+    private fun applyBrushHistory(redo: Boolean): Boolean {
+        if (activeBrushStroke != null) return false
+        val session = editingSession ?: return false
+        return try {
+            val patch = if (redo) session.history.redo() else session.history.undo() ?: return false
+            if (patch == null) return false
+            refreshEditedTiles(patch.changedChunkIds)
+            onBrushHistoryChanged?.invoke()
+            if (redo) onBrushStrokeRedone?.invoke() else onBrushStrokeUndone?.invoke()
+            true
+        } catch (error: Exception) {
+            onBrushError?.invoke(error.message ?: "The brush history could not be applied.")
+            false
+        } catch (error: OutOfMemoryError) {
+            onBrushError?.invoke("There is not enough memory to update the brush history.")
+            false
+        }
+    }
+
+    private fun refreshEditedTiles(ids: Set<RasterChunkId>) {
+        val session = editingSession ?: return
+        for (id in ids) {
+            val snapshot = session.raster.visibleChunkSnapshot(id)
+            if (snapshot == null) {
+                editedTileBitmaps.remove(id)?.bitmap?.recycle()
+            } else {
+                updateEditedTileBitmap(snapshot)
+            }
+        }
+        invalidate()
+    }
+
+    private fun restoreEditedTiles(session: LayerEditingSession) {
+        clearEditedTileBitmaps()
+        for (snapshot in session.raster.committedChunkSnapshots()) updateEditedTileBitmap(snapshot)
+    }
+
+    private fun updateEditedTileBitmap(snapshot: RasterChunkSnapshot) {
+        val bounds = snapshot.bounds
+        val existing = editedTileBitmaps[bounds.id]
+        val tileBitmap = if (existing?.bounds?.width == bounds.width && existing.bounds.height == bounds.height) {
+            existing.bitmap
+        } else {
+            existing?.bitmap?.recycle()
+            Bitmap.createBitmap(bounds.width, bounds.height, Bitmap.Config.ARGB_8888).also {
+                editedTileBitmaps[bounds.id] = EditedTileBitmap(bounds, it)
+            }
+        }
+        val bytes = snapshot.copyPixels()
+        val pixels = IntArray(bounds.width * bounds.height)
+        for (index in pixels.indices) {
+            val offset = index * 4
+            val alpha = bytes[offset + 3].toInt() and 0xff
+            val red = unpremultiply(bytes[offset].toInt() and 0xff, alpha)
+            val green = unpremultiply(bytes[offset + 1].toInt() and 0xff, alpha)
+            val blue = unpremultiply(bytes[offset + 2].toInt() and 0xff, alpha)
+            pixels[index] = (alpha shl 24) or (red shl 16) or (green shl 8) or blue
+        }
+        tileBitmap.setPixels(pixels, 0, bounds.width, 0, 0, bounds.width, bounds.height)
+        editedTileBitmaps[bounds.id] = EditedTileBitmap(bounds, tileBitmap)
+    }
+
+    private fun unpremultiply(channel: Int, alpha: Int): Int =
+        if (alpha == 0) 0 else ((channel * 255 + alpha / 2) / alpha).coerceAtMost(255)
+
+    private fun clearEditedTileBitmaps() {
+        editedTileBitmaps.values.forEach { if (!it.bitmap.isRecycled) it.bitmap.recycle() }
+        editedTileBitmaps.clear()
+    }
+
+    private fun updateContentDescription() {
+        val currentLayer = layer
+        contentDescription = if (currentLayer == null) {
+            context.getString(R.string.canvas_project_description)
+        } else if (brushMode) {
+            context.getString(R.string.canvas_layer_description, currentLayer.name) + " Brush mode is on."
+        } else {
+            context.getString(R.string.canvas_layer_description, currentLayer.name)
+        }
+    }
+
+    private data class EditedTileBitmap(val bounds: com.wonderassembly.compositor.core.RasterChunkBounds, val bitmap: Bitmap)
 
     private data class PinchGeometry(val focusX: Double, val focusY: Double, val span: Double)
 
@@ -276,24 +558,34 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     fun showLayer(
         project: CompProjectReader.Project,
         layer: CompProjectReader.Layer,
-        bitmap: Bitmap
+        bitmap: Bitmap,
+        editingSession: LayerEditingSession?
     ) {
+        finishBrushStroke(commit = false)
         resetViewportForProject(project)
+        clearEditedTileBitmaps()
         replaceBitmap(bitmap)
         this.project = project
         this.layer = layer
+        this.editingSession = editingSession
+        brushMode = false
         showingComposite = false
         layerOpacity = layer.opacity
         message = context.getString(R.string.layer_preview_note)
-        contentDescription = context.getString(R.string.canvas_layer_description, layer.name)
+        updateContentDescription()
+        editingSession?.let(::restoreEditedTiles)
         invalidate()
     }
 
     fun showComposite(project: CompProjectReader.Project, bitmap: Bitmap, note: String) {
+        finishBrushStroke(commit = false)
         resetViewportForProject(project)
+        clearEditedTileBitmaps()
         replaceBitmap(bitmap)
         this.project = project
         layer = null
+        editingSession = null
+        brushMode = false
         showingComposite = true
         message = note
         contentDescription = context.getString(R.string.canvas_composite_description, note)
@@ -301,9 +593,13 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     }
 
     fun showMessage(project: CompProjectReader.Project, message: String) {
+        finishBrushStroke(commit = false)
+        clearEditedTileBitmaps()
         replaceBitmap(null)
         this.project = project
         layer = null
+        editingSession = null
+        brushMode = false
         showingComposite = false
         this.message = message
         contentDescription = message
@@ -311,9 +607,13 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     }
 
     fun clear(message: String) {
+        finishBrushStroke(commit = false)
+        clearEditedTileBitmaps()
         replaceBitmap(null)
         project = null
         layer = null
+        editingSession = null
+        brushMode = false
         showingComposite = false
         resetViewport()
         this.message = message
@@ -325,6 +625,22 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
         cancelPanResetAnimation()
         constrainPan()
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) {
+            finishBrushStroke(commit = false)
+            multiTouchGesture = false
+            clearPinchBaseline()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        finishBrushStroke(commit = false)
+        cancelPanResetAnimation()
+        clearEditedTileBitmaps()
+        super.onDetachedFromWindow()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -354,6 +670,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
             canvas.drawBitmap(currentBitmap, null, documentRect, imagePaint)
         } else if (currentLayer != null && currentBitmap != null) {
             drawLayer(canvas, fitted, currentProject, currentLayer, currentBitmap)
+            drawEditedTiles(canvas, fitted, currentProject, currentLayer)
         }
         canvas.restoreToCount(save)
         canvas.drawRect(documentRect, borderPaint)
@@ -389,6 +706,42 @@ internal class CanvasPreviewView(context: Context) : View(context) {
             ),
             imagePaint
         )
+        canvas.restoreToCount(save)
+    }
+
+    private fun drawEditedTiles(
+        canvas: Canvas,
+        documentRect: CanvasPreviewGeometry.Rect,
+        project: CompProjectReader.Project,
+        layer: CompProjectReader.Layer
+    ) {
+        if (editedTileBitmaps.isEmpty()) return
+        val session = editingSession ?: return
+        val transform = layer.transform
+        val scale = documentRect.width / project.width
+        val centerX = documentRect.left + (transform.x + transform.width / 2) * scale
+        val centerY = documentRect.top + (transform.y + transform.height / 2) * scale
+        val targetWidth = transform.width * scale
+        val targetHeight = transform.height * scale
+        val save = canvas.save()
+        canvas.translate(centerX.toFloat(), centerY.toFloat())
+        canvas.rotate((transform.rotation % 360.0).toFloat())
+        canvas.scale(if (transform.flipX) -1f else 1f, if (transform.flipY) -1f else 1f)
+        imagePaint.alpha = (layerOpacity.coerceIn(0.0, 1.0) * 255).toInt()
+        imagePaint.isFilterBitmap = transform.sampling != "Nearest"
+        for ((_, tile) in editedTileBitmaps) {
+            if (tile.bitmap.isRecycled) continue
+            val left = -targetWidth / 2 + tile.bounds.left.toDouble() / session.raster.width * targetWidth
+            val top = -targetHeight / 2 + tile.bounds.top.toDouble() / session.raster.height * targetHeight
+            val right = left + tile.bounds.width.toDouble() / session.raster.width * targetWidth
+            val bottom = top + tile.bounds.height.toDouble() / session.raster.height * targetHeight
+            canvas.drawBitmap(
+                tile.bitmap,
+                null,
+                RectF(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat()),
+                imagePaint
+            )
+        }
         canvas.restoreToCount(save)
     }
 
@@ -486,5 +839,6 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         private const val MIN_ZOOM = 1.0
         private const val MAX_ZOOM = 12.0
         private const val PAN_RESET_DURATION_MS = 220L
+        private const val BRUSH_DIAMETER_PIXELS = 32.0
     }
 }

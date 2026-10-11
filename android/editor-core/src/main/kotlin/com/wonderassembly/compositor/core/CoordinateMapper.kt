@@ -34,6 +34,14 @@ data class ViewportTransform(
 
 /** All coordinates use a top-left origin, +x right, +y down, and pixel-edge positions. */
 object CoordinateMapper {
+    /** Maps a local window position through the viewport and into the layer's source pixels. */
+    fun windowToLayer(
+        window: PointD,
+        viewport: ViewportTransform,
+        sourceSize: PixelSize,
+        transform: LayerTransform
+    ): PointD = canvasToLayer(viewport.windowToCanvas(window), sourceSize, transform)
+
     fun layerToCanvas(source: PointD, sourceSize: PixelSize, transform: LayerTransform): PointD {
         val unflippedX = source.x / sourceSize.width * transform.width
         val unflippedY = source.y / sourceSize.height * transform.height

@@ -209,3 +209,104 @@
 - 最新APK：`android/app/build/outputs/apk/debug/app-debug.apk`，SHA-256 `8321cc5edf252ec67e240728bb086d25c782ebe66d7dde3acf40e71cff358e24`。
 - 设备复测结果：用户反馈“没问题了”，确认松手后回中符合预期；记为该交互的Fold手动验收通过，不延伸为对双击、触控笔或全部手势组合的完整验收。
 - 后续：用户要求先更新开发文档，不开始下一项开发；当前停在本次手势体验验收记录。
+
+## INPUT-01 / BRUSH-01：活动图层坐标映射与首个分块笔画事务（2026-10-10）
+
+- 基线与范围：从`work`/`origin/work`最新提交`230b39b5e450d52ccc353c9d430c7e0e8b6de4e8`继续。先阅读根目录`AGENTS.md`、Android PRD、开发计划、README及本目录验证/历史文档。实现本轮计划中的触点到活动层像素映射及首笔事务，不修改PRD或`.comp`样例。
+- 坐标映射：`CanvasPreviewView`把本地View位置映射到当前显示的项目画布像素，再通过`CoordinateMapper.canvasToLayer`反解选中图层的缩放、旋转和翻转，输出源PNG像素坐标。画布视口已经包含当前缩放和平移；视口外和源层边界外的触点不落笔，离开后重新进入会分段，不跨空白连线。
+- 分块源读取：新增`LayerEditingSession`和惰性PNG区域读取器，为一个项目图层保留临时编辑状态。需要时用`BitmapRegionDecoder`读取源PNG的原分辨率矩形，默认256×256（图像边缘块可小于该尺寸），转换为RGBA8/sRGB/预乘Alpha。缓存按会话内存预算检查，不提前展开整张源图；该预算与像素格式仍未设备测量。
+- 事务与显示：`ChunkedRaster`保存每个访问块的原始/当前像素；`ChunkedBrushStroke`实现固定32px黑色硬笔刷，按源坐标插值补齐线段并对预乘Alpha像素做source-over。完成后返回块级before/after `ChunkedStrokePatch`，支持undo/redo调用，但本轮App未保留patch或提供历史按钮。抬指提交内存块；系统`ACTION_CANCEL`、失焦、视图拆除和图层切换回滚活动笔画；第二触点出现时先提交当前有效笔迹，再将该序列锁为导航，避免连接两指位置。图块叠加在当前层原始预览上；不回写`.comp`，进程死亡后临时改动会丢失，旋转/Activity配置变更保留会话。
+- 可用范围：只对可见的像素PNG层开放，且要求非组、非调整层、Normal混合、正不透明度和无图层效果。brush尺寸、颜色、橡皮、锁定层、压感、掌触和真实笔输入都未做；这是第一笔连通性原型，不是完整绘画器。
+- 测试：新增`ChunkedBrushStrokeTest`6项与`CoordinateMapperTest`2项；另运行原有app单测10项。最终`:editor-core:testDebugUnitTest :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`成功，18项测试失败/错误/跳过均为0；Lint 0错误、4条既有建议（目标API、Gradle、compileSdk、ChromeOS x86_64 ABI）；96项任务中17项执行、79项最新。`git diff --check`通过。最终APK为`android/app/build/outputs/apk/debug/app-debug.apk`，SHA-256 `f67332034095de1e7042703839e44c499fe73ac2d86e9c82f4ab0660f00b0316`。本轮又以四个`COMPOSITOR_DEBUG_*`变量显式指定当前debug keystore重建APK，`apksigner`确认指纹保持为`342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`。此前APK/keystore不在当前工作区，无法本地确认或沿用旧证书。
+- 检查过程中的修正：第一次构建发现Android普通`Activity`没有`lastCustomNonConfigurationInstance`/`onRetainCustomNonConfigurationInstance` API，改用平台的`lastNonConfigurationInstance`/`onRetainNonConfigurationInstance`；坐标单测窗口样本期望值修正为对应图层中点；第一次无障碍Lint提出触摸回调可访问性建议，已将`performClick()`点击分发放在触摸监听器内。最终构建另修正了一次监听器lambda参数名错误，最终Lint不再报该项。以上皆非待解决失败。
+- 环境：临时Temurin JDK21.0.12.1（SHA-256见本会话环境记录）、Android SDK Platform36/Build Tools36、NDK27.2.12479018、CMake3.22.1、Gradle9.6.0、AGP9.4.0。代理TLS通过`/etc/ssl/certs/java/cacerts`验证。云端adb设备列表为空，无Mac环境；本轮新画笔无Fold/平板实机验证，不记录为TC-004/005/009设备通过。
+- 用户文件：当前`/workspace`不存在`Compositor-Android-FIX03.zip`、`Compositor-Android-FIX04.zip`和`Compositor-Android-Preview-Navigation.zip`；未删除、重建或加入源码。没有更新或重发测试`.comp`文件。
+- 下一步：Fold上安装当前APK，按PRD的变换层、跨分块连续笔画、系统取消、单指绘画转双指导航检查。完成设备记录后接入HISTORY-01历史栈和预算，再开发保存/重开/导出闭环。
+
+## BRUSH-01跟进：双指缩放起点的笔刷印记（2026-10-10）
+
+- 用户报告双指缩放时第一指碰触位置会出现笔迹。原因是单指`ACTION_DOWN`立即显示brush dab，后续`ACTION_POINTER_DOWN`将这笔提交。
+- 修正：第二指进入时静默取消未完成的`ChunkedBrushStroke`事务并刷新受影响图块，然后继续锁定整段多指触摸为导航手势。这样既回滚第一指产生的临时笔迹，也不会显示“笔画已取消”；若第一指在第二指进入前移动过，该未完成笔迹也随事务整体回滚。
+- 构建：外置固定debug keystore下`:app:assembleDebug`成功，56项任务中6项执行、50项最新；`apksigner`确认SHA-256证书指纹保持`342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`。最终APK SHA-256 `475112cb5cd33ab7909b3fbea023a4b409e698a0d63d54dfd89d71c02730d899`。未运行测试或Lint；`git diff --check`通过。
+- 验收：当前环境无连接设备，修正尚未在Fold复测；需确认双指捏合起点无残留，且正常单指抬起仍能提交笔画。测试`.comp`没有变化。
+
+- 设备反馈：用户随后在Fold复测并回复“没问题了”，确认双指缩放起点不再留下笔迹。只把该仲裁问题记为设备通过；普通绘画坐标、跨块、取消与笔感仍待测。
+
+## HISTORY-01：分块笔画撤销与重做（2026-10-10）
+
+- 实现：新增`ChunkedStrokeHistory`，保留选中图层会话中已提交的笔刷patch；每次笔画是一条undo记录。最多20条并按before/after RGBA快照像素字节共同限额，预算吃紧时按需淘汰最旧的undo条目。新笔画在undo后成功进入历史时清空redo分支；单个patch不能放入空历史预算时撤销该笔并提示。Undo/Redo更新当前图层块预览，不把导航事件记录入历史。
+- UI/生命周期：画布工具行增加Undo/Redo按钮，按当前图层历史状态启用/禁用；切换图层保留各自的历史，Activity配置变化沿用现有会话保留方式。编辑仍仅在内存，不保存到项目；变换/删除和跨层全局历史尚未接入。
+- 内存：图层会话给出的编辑额度划分给原/当前分块缓存、历史快照与活动笔画余量；历史最多20条。当前预算按快照载荷字节计算，不含对象元数据或多图层会话的设备级峰值，Fold/4K压力尚未测量。
+- 构建：`:app:assembleDebug`成功，56项Gradle任务中13项执行、43项最新；未新增或运行自动行为测试，也未运行Lint。此前18项单测只覆盖映射与底层笔刷事务，不覆盖新增历史栈。20笔往返、历史分支、预算淘汰顺序和峰值需要后续验证。`git diff --check`通过。
+- APK：`app/build/outputs/apk/debug/app-debug.apk`，SHA-256 `99ee376930e9cc46437c939a0ac0ccbb0974bd651a3672489a74ce88290c27cb`；签名保持使用固定debug证书，SHA-256指纹`342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`。
+- 下一步：先复核历史栈的预算和边界规则，补自动行为检查；Fold验收20笔undo/redo、undo后新画笔清空redo、切层后各层历史隔离及双指导航不产生历史，再进入基础保存链路。
+
+## IO-01 / FILE-01 后续：独立 `.comp.zip` 项目副本（2026-10-10）
+
+- 目的：在直接`.comp`文件夹安全写入与重开设计完成前，提供源目录之外的项目副本，并把当前已提交的分块笔画纳入副本；保留Mac manifest格式和源项目不变。
+- 实现：工具行增加“Save Copy (.comp.zip)”，系统`ACTION_CREATE_DOCUMENT`创建外部ZIP。`CompProjectReader.Project`保留源tree URI、包目录名、`images/`所有直接子项元数据和manifest原始字节。`CompProjectArchiveWriter`写成`目录名.comp.zip`，内部根目录为`目录名.comp/`，保留原始manifest字节和所有平铺资源；只替换有已提交笔迹的图层PNG。Undo到原始像素的会话不触发重编码。资源逐流复制，输入缓冲64KiB，检查512MiB单资源上限；拒绝嵌套`images/`目录和含路径分隔符/控制字符的文件名。UI尝试拒绝能由SAF document ID识别的源包内部目标；外部写入失败尽力删除半成品。源文件夹保持只读，不清除历史，也不更改已保存状态。
+- 限制：Android reader仍只读`.comp`目录，不支持ZIP导入/解包重开；直接`.comp`目录安全保存、保存状态管理、恢复副本、图片导入和整图导出仍未实现。某些DocumentsProvider使用不透明ID，内部目标判断能力有限；后台打包没有用户取消按钮；嵌套`images/`目录会拒绝写副本。Mac尚未验证该ZIP结构是否可打开。
+- 构建检查：固定外置debug keystore下加入归档实现后的`:app:assembleDebug`成功，56项任务中18项执行、38项最新；无障碍文案调整后的最终构建成功，56项任务中10项执行、46项最新。`git diff --check`通过。`apksigner verify --print-certs`确认SHA-256签名指纹保持`342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`。最终APK SHA-256为`ac125d69ca4185351f0a8ad33813cd0c90f3d6633f5d847e60e69927e0f51816`。
+- 未验证：未运行单测或Lint；未打开归档检查central directory/CRC、条目路径、替换层像素或错误恢复；没有`adb`，未在Fold安装；没有Mac环境，未解包/打开；未测试SAF写权限、取消和删除。用户尚未验收本次文件行为。未创建、删除或改动用户提及的旧ZIP及测试`.comp`样例。
+- 下一步：Fold检查单层PNG透明边缘、笔画及undo/redo后的像素和源`.comp`不变；用小项目检查ZIP结构/像素/失败清理，在Mac解包打开，再实施ZIP安全导入与重开。
+
+## IO-01 / FILE-01：安全 `.comp.zip` 导入与重开（2026-10-11）
+
+- 实现：项目打开入口可选 `.comp` 文件夹或 `.comp.zip`。导入兼容一个`名称.comp/`目录根，以及PRD规定的直接`manifest.json`和`images/`根。两种入口交给同一`CompProjectReader`做manifest、图层关系、引用文件和PNG头校验；Activity再解码预检全部被引用资源，候选项目通过后才替换当前画布。失败时清理候选缓存并保留原项目；切换时关闭旧编辑会话并清理旧的ZIP提取缓存。
+- ZIP检查：归档先复制到应用私有缓存，通过`ZipFile`中心目录读取并用本地中心目录字段检查条目名和Unix/macOS类型位。拒绝多根/混合根、未知路径、绝对或穿越路径、反斜杠、控制字符、重复路径、嵌套`images/`目录、分卷/ZIP64、加密条目、未知压缩方法、Unix符号链接及特殊文件。输入归档≤1GiB，最多20,003项，manifest≤4MiB，资源≤512MiB，总解压≤1GiB；逐项实际解压时核对长度和CRC32。导入只写入私有临时目录，不修改源归档或外部文件夹。
+- 生命周期：归档提取缓存随当前Project持有；成功切换项目或Activity结束时清理。旋转时通过非配置实例保留当前Project与临时笔刷会话，避免重新提取导致会话指向失效文件。冷启动会清理此前遗留的导入缓存，恢复工程时再从用户选择的持久URI导入。
+- 构建与代码检查：JDK21、Android SDK Platform/Build Tools36、NDK27.2.12479018和CMake3.22.1安装在仓库外后，固定外部debug签名执行`:app:assembleDebug`成功（56项任务中6项执行、50项最新），ARM64 native链接通过。`git diff --check`通过；本轮没有运行单元测试、Lint或ZIP行为检查。`apksigner`核对证书SHA-256为`342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`，最终APK SHA-256为`db873ed19465cbf8ce8296dcb970b8785b5db246475654dc52f259e7b81ba8ad`。
+- 待设备/Mac验证：`adb devices`为空；未安装Fold或模拟器；无Mac环境。未从系统文件选择器打开ZIP，也未实际验证正常项目打开、保存副本后重开、损坏CRC/恶意路径拒绝、失败时保留旧画布、缓存清理和源ZIP未变化。Mac归档兼容、图层像素和SAF持久权限待验证。
+- 用户文件：没有修改或发送测试`.comp`样例；用户提到的FIX03、FIX04和Preview-Navigation旧ZIP未添加、删除或重建。
+- 下一步：Fold验收归档打开、另存后重开和导入失败保护；自动检查恶意ZIP/CRC与资源上限；Mac解包打开；之后继续整图合成导出和PNG/JPEG导入。
+
+## INSTALL-01：最新 APK 在 Fold 安装扫描后退出（2026-10-11）
+
+- 用户反馈：此前版本可以进入安装界面；最新 `app-debug(16).apk` 点击后显示“安装包扫描中，请稍候”，约数秒后直接返回文件列表。两份录屏附件内容相同。视频中设备显示文件约3.24 MB，与当前本地产物大小相符；未取得设备端文件哈希，不能据此确认字节完全一致。用户随后确认旧版应用已卸载。
+- 当前本地产物：`android/app/build/outputs/apk/debug/app-debug.apk`，3,235,288字节，SHA-256 `db873ed19465cbf8ce8296dcb970b8785b5db246475654dc52f259e7b81ba8ad`。此前静态检查确认ZIP完整、APK v2签名有效，包名`com.wonderassembly.compositor`、版本0.1.0、最低API31、目标API36、ARM64。清单和版本配置没有本轮修改；最新APK尚未在设备上安装。
+- 新旧APK对比：用户上传的旧`app-debug(15).apk` SHA-256为`ac125d69ca4185351f0a8ad33813cd0c90f3d6633f5d847e60e69927e0f51816`。两包证书指纹相同（`342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`），签名方案相同（仅v2），`AndroidManifest.xml`字节完全相同；两包均有18个条目、5个DEX、同一ARM64库路径。旧版已卸载，因此旧应用覆盖更新冲突也不成立。
+- 静态完整性：两个APK的ZIP条目CRC均通过；所有DEX均为039格式，头部大小、声明文件长度、SHA-1和Adler-32均自洽；原生库均为AArch64 ELF，APK内数据偏移均满足16KiB对齐。新版的resources、classes3/classes4和原生库字节有变化，属于包内容差异；仅凭离线静态检查未发现容器损坏或签名/清单差异。
+- 故障范围：录屏停在MIUI安装包扫描界面，Compositor尚未启动；签名不连续、包名/Manifest差异和旧应用更新冲突已排除。当前没有连接设备或PackageInstaller日志，尚不能判断是MIUI扫描器拒绝、设备端文件与本地产物字节不同，还是新版内容触发其他安装器错误。
+- 下一步：获取当前Fold上对最新APK的`adb install`/PackageInstaller错误码或MIUI安全扫描记录，并核对设备文件SHA-256与本地产物是否一致；在取得设备侧原因前不改动已通过对比的签名、Manifest或ZIP布局。
+
+
+## IO-02：整图PNG/JPEG、图片新项目导入与笔迹合成（2026-10-11）
+
+- 授权与范围：用户要求先暂缓安装扫描退出问题，继续开发，并连续多步后统一提供测试内容。保留INSTALL-01为未解决；故障包另存仓库外`/tmp/compositor-install-repro-db873ed1.apk`，哈希仍为`db873ed19465cbf8ce8296dcb970b8785b5db246475654dc52f259e7b81ba8ad`。未重建/重置工作区，保留已有未提交源码；无测试`.comp`更新，无旧ZIP操作。
+- 步骤1：PreviewCompositeRenderer新增fullResolution模式；原画布尺寸、源资产不采样，包含七种混合、图层变换/透明度、像素/组/实时剪贴蒙版和已提交稀疏块。导出预检可见内容，含未支持调整/效果/混合时拒绝，剪贴来源的效果也拒绝。按动态余量为完整位图、来源、蒙版、实时覆盖和saveLayer缓冲预留预算；超预算拒绝，没有输出缩小预览。
+- 步骤2：CompositeImageExporter逐行输出透明RGBA8/sRGB PNG；JPEG在同一合成位图后方填白，选择75/90/100质量。Export Canvas通过SAF创建独立目标，拒绝已知源资产或源包内部目标。操作期间禁止编辑/开项目；独立任务保存完成/取消状态，配置变化取消并等待清理再恢复入口。进度、Cancel Export、失败/取消删除半成品以及删除失败提示已接入；导出不清除历史或标为项目已保存。
+- 步骤3：ProjectImageImporter复制≤512MiB输入到私有缓存，以实际MIME识别PNG/JPEG并拒绝动画和部分解码。解码前检查项目格式尺寸、像素数和设备预算；ImageDecoder软件解码应用照片方向，目标sRGB，规范化RGBA8 PNG写入私有单层`.comp`（v11/72dpi）。manifest/PNG仍经过项目读取器与资产预检；失败/取消清理候选缓存，只有成功后替换旧项目。生成ZIP副本嵌入规范化图像，不依赖原照片。Cancel Open、未保存笔迹切换警告及打开/导出互斥已加入。
+- 步骤4：Composite工具返回带已提交笔迹的有界合成。已改块逐块投影覆盖，无需复制所有编辑快照；精确模式只替换修改块，未修改源像素保持原解码结果。剪贴覆盖也读取当前提交块。成功重开同源文件夹会重建编辑会话，避免沿用不匹配的旧像素。
+- 限制：全分辨率Bitmap合成是过渡实现，大图分块管线仍未完成，4K/10层性能未承诺。新图片目前创建新项目，不追加到现有画布；超预算未提供缩小选项。DPI输出元数据、JPEG导出结果预览/连续质量、分享、文件夹安全写回/自动恢复、全部Mac效果仍未实现。单次平台解码/编码不能保证即时中断。SAF不透明ID/URI别名、删除失败和后台/进程死亡需要设备验证。
+- 检查：本轮多个阶段`:app:assembleDebug --offline`成功；最终56项任务中14项执行、42项最新，Kotlin/ARM64链接和打包通过。`git diff --check`通过；`apksigner verify --print-certs`通过，证书SHA-256保持`342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`。本轮未新增或运行单元测试、Lint、PNG/JPEG像素、ZIP行为或仪器测试。构建/签名不等于安装或文件行为通过。
+- 产物：`app/build/outputs/apk/debug/Compositor-Android-IO02.apk`（与app-debug.apk同字节），3,283,316字节，SHA-256 `80bfb48365dbd9fdb4537ae0088267e7df8a7ed1cac5f95effb493a31bbf46f6`；APK/build目录不提交。
+- 待测：`adb devices`为空，无连接设备，无Mac环境。导入方向/透明度、合成像素/块边界、PNG/JPEG查看器、导出转屏/取消/清理、ZIP保存重开、源文件不变及Mac互通全待验证；使用[合并清单](io-roundtrip-checklist.zh-CN.md)，不重复发送未变更样例。
+- 下一步：安装诊断按用户要求暂缓；设备可用后统一记录TC-013/019及文件往返结果。继续现有项目追加图层、新建画布、安全保存/恢复与分块合成，补历史/PNG/ZIP固定数据和Mac证据，不把P0基础链路代码贯通等同完整验收。
+
+
+## INSTALL-01恢复：IO-02仍无法安装与兼容候选（2026-10-11）
+
+- 反馈：用户确认IO-02仍无法安装，恢复安装诊断；用户暂时不能连接电脑。未得到新PackageInstaller错误码、设备页大小或手机端APK哈希，根因仍未确定。
+- 发现：旧15和IO-02的原生库ZIP偏移均16KiB对齐，但ELF LOAD均4KB对齐；这是一项需要补齐的16KB兼容缺陷，不能据此宣称它是Fold回归根因。两包Manifest字节相同、证书相同，重新核查未发现ZIP损坏。
+- 修改：NDK开启flexible page sizes；debug同一密钥生成v1/v2/v3；可选`compositor.installerCompatibility=true`压缩并提取native库，默认保持未压缩映射。干净重新生成app打包产物成功（59任务：24执行/17缓存/18最新），工作区源码未重置，编辑功能保持。候选5个DEX和resources.arsc与IO-02完全相同。
+- 检查通过：ZIP CRC、APK资源对齐、Manifest解析、实际API范围v3签名及分别核验v1/v2、固定证书指纹、5个DEX的dexdump结构/反汇编、ELF LOAD的16KB对齐和`git diff --check`。未运行编辑单测/Lint，未进行设备安装或JNI运行。
+- 产物：`app/build/outputs/apk/debug/Compositor-Android-INSTALL01.apk`，3,089,975字节，SHA-256 `6ad11d88351fc5e55a8c7db6141d0ebe0986501d21717eb471821246a09904a5`。证书SHA-256仍为`342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`。原IO-02在忽略的build/install-diagnostics和原下载路径保留；未处理用户三个旧ZIP。
+- 状态：兼容候选已生成，安装问题仍未解决。下一步先测能否安装；已请求上传手机端实际失败包核对传输，不重复要求卸载。详细证据与可复现命令见[安装诊断](installation-diagnostics.zh-CN.md)。成功安装后再执行IO-02合并功能清单。
+
+## INSTALL-01用户确认安装通过（2026-10-11）
+
+- 用户明确反馈INSTALL01“这个版本可以安装了”，把SHA-256为`6ad11d88351fc5e55a8c7db6141d0ebe0986501d21717eb471821246a09904a5`的设备安装记为通过；不自动确认应用启动、JNI或IO-02功能。
+- 后续默认改用已成功组合：压缩原生库/安装提取、16KB ELF对齐、固定证书v1/v2/v3。`compositor.installerCompatibility`默认true，无需附加参数；false仅保留诊断用途。多个措施同时变化，具体失败根因没有隔离，不归因于某一个措施。
+- 当前成功包继续使用，不重发业务代码未变化的APK或测试comp；按IO-02合并清单验证导入→绘画/撤销→合成→保存重开→导出及取消/失败保护。
+
+- 默认配置复核：未传installerCompatibility参数的`:app:assembleDebug --offline`成功（56任务：2执行/54最新）；app-debug.apk与用户成功安装的INSTALL01哈希完全相同，原生ZIP method8，签名证书一致；`git diff --check`通过。未新增/运行功能测试，不重复发同字节APK。
+
+## 本地Codex / ADB交接准备（2026-10-11）
+
+- 用户希望由本地Codex通过ADB执行并回传测试。新增local-codex-adb-handoff.zh-CN.md和adb-result-template.zh-CN.md，准备包含已验收INSTALL01 APK、精确基线、工作区patch和未跟踪源码的交接包；不含签名密钥/密码、SDK或未更新comp样例。
+- 本地任务覆盖IO-02八组：UI操作、文件往返、像素/哈希、取消/失败与证据收集。双指/折叠、云盘、低存储和Mac环境不足时保持待测；不卸载/清数据或破坏个人文档。先保护内存笔迹，使用自建测试副本。
+- 结果要求RESULT.md、results.csv、命令、设备信息、截图/UI XML、相关日志、自建输入和真实PNG/JPEG/ZIP输出；逐项PASS/FAIL/BLOCKED/NOT_RUN，返回当前云端对话附件。此处仅准备交接，未执行本地ADB或提升任何功能验收状态。
+
+## GitHub work本地开发交接（2026-10-11）
+
+用户授权提交并推送当前全部Android源码和文档到GitHub work，方便本地直接接续。包括分块笔刷/历史、PNG/JPEG/ZIP导入导出、固定签名配置、已成功安装的默认兼容打包和实际验证记录；不提交APK/build/SDK/keystore/密码或用户旧ZIP。交接说明改为clone/pull work，旧离线patch仅作历史快照，不在新work重复应用。功能设备验证仍待回传；签名密钥单独迁移。推送结果和提交哈希以Git远端核对与本次最终回复为准。

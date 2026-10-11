@@ -8,15 +8,17 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
 import java.util.Locale
 import java.util.UUID
 
 /**
- * Reads the metadata and verifies the referenced PNG headers in a Compositor directory package.
+ * Reads the metadata and verifies the referenced PNG headers in a Compositor package.
  * The original JSON is kept intact so fields this first Android milestone does not understand are
- * not discarded. This reader is deliberately read-only; saving is added only with safe package
- * replacement support for the selected document provider.
+ * not discarded. The source package remains read-only; separate archive copies are handled by the
+ * archive writer.
  */
 class CompProjectReader(private val context: Context) {
     data class Layer(
@@ -50,7 +52,16 @@ class CompProjectReader(private val context: Context) {
 
     data class PixelSize(val width: Int, val height: Int)
 
+    data class PackageAsset(
+        val name: String,
+        val uri: Uri,
+        val size: Long?,
+        val isDirectory: Boolean
+    )
+
     data class Project(
+        val sourceUri: Uri,
+        val packageFolderName: String,
         val formatVersion: Int,
         val documentId: String,
         val width: Int,
@@ -62,8 +73,13 @@ class CompProjectReader(private val context: Context) {
         val imageSizes: Map<String, PixelSize>,
         val maskUris: Map<String, Uri>,
         val maskSizes: Map<String, PixelSize>,
+        val packageAssets: List<PackageAsset>,
+        /** Original manifest bytes are copied verbatim so fields this milestone does not know stay intact. */
+        val originalManifestBytes: ByteArray,
         /** All original fields, including optional fields not yet modeled by Android. */
-        val originalManifest: JSONObject
+        val originalManifest: JSONObject,
+        /** Private extraction backing an imported ZIP, removed when this project is replaced. */
+        val archiveCacheDirectory: File? = null
     )
 
     private data class Entry(val id: String, val name: String, val mimeType: String, val size: Long?)
@@ -86,6 +102,53 @@ class CompProjectReader(private val context: Context) {
         }
         requireWithinLimit(manifestEntry, MAX_MANIFEST_BYTES.toLong(), "project manifest")
         val manifestBytes = readLimited(documentUri(treeUri, manifestEntry.id), MAX_MANIFEST_BYTES)
+        val imagesEntry = rootByName["images"]
+            ?: throw IllegalArgumentException("The project does not contain an images folder.")
+        require(imagesEntry.mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+            "The project images entry is not a folder."
+        }
+        val packageAssets = uniqueEntries(listChildren(treeUri, imagesEntry.id), "images folder").values.map { entry ->
+            PackageAsset(
+                entry.name,
+                documentUri(treeUri, entry.id),
+                entry.size,
+                entry.mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+            )
+        }
+        return readProject(treeUri, root.name, manifestBytes, packageAssets)
+    }
+
+    /** Reads a safely extracted package produced by [CompProjectArchiveImporter]. */
+    internal fun readExtractedPackage(
+        sourceUri: Uri,
+        packageRoot: File,
+        packageFolderName: String,
+        cacheDirectory: File
+    ): Project {
+        require(packageRoot.isDirectory) { "The archive does not contain a Compositor project folder." }
+        val manifestFile = File(packageRoot, "manifest.json")
+        require(manifestFile.isFile) { "The project does not contain manifest.json." }
+        require(manifestFile.length() <= MAX_MANIFEST_BYTES) { "The project manifest exceeds the supported size limit." }
+        val manifestBytes = FileInputStream(manifestFile).use { readLimited(it, MAX_MANIFEST_BYTES) }
+        val imagesDirectory = File(packageRoot, "images")
+        require(imagesDirectory.isDirectory) { "The project does not contain an images folder." }
+        val packageAssets = (imagesDirectory.listFiles()
+            ?: throw IllegalArgumentException("Could not read the project images folder.")).map { file ->
+            PackageAsset(file.name, Uri.fromFile(file), file.length(), file.isDirectory)
+        }
+        require(packageAssets.map { it.name }.toSet().size == packageAssets.size) {
+            "The images folder contains duplicate names, so project contents are ambiguous."
+        }
+        return readProject(sourceUri, packageFolderName, manifestBytes, packageAssets, cacheDirectory)
+    }
+
+    private fun readProject(
+        sourceUri: Uri,
+        packageFolderName: String,
+        manifestBytes: ByteArray,
+        packageAssets: List<PackageAsset>,
+        archiveCacheDirectory: File? = null
+    ): Project {
         val manifestText = String(manifestBytes, Charsets.UTF_8)
         val manifest = try {
             JSONObject(manifestText)
@@ -120,12 +183,10 @@ class CompProjectReader(private val context: Context) {
         }
         validateGuides(manifest, version)
 
-        val imagesEntry = rootByName["images"]
-            ?: throw IllegalArgumentException("The project does not contain an images folder.")
-        require(imagesEntry.mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
-            "The project images entry is not a folder."
+        val imageEntries = packageAssets.associateBy { it.name }
+        require(imageEntries.size == packageAssets.size) {
+            "The images folder contains duplicate names, so project contents are ambiguous."
         }
-        val imageEntries = uniqueEntries(listChildren(treeUri, imagesEntry.id), "images folder")
         val imageUris = LinkedHashMap<String, Uri>()
         val imageSizes = LinkedHashMap<String, PixelSize>()
         val maskUris = LinkedHashMap<String, Uri>()
@@ -133,9 +194,9 @@ class CompProjectReader(private val context: Context) {
         for (layer in layers) {
             layer.imageFile?.let { filename ->
                 val entry = imageEntries[filename] ?: throw IllegalArgumentException("Image file is missing for layer “${layer.name}”.")
-                require(entry.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) { "Layer image is not a file." }
-                requireWithinLimit(entry, MAX_ASSET_BYTES, "layer image")
-                val uri = documentUri(treeUri, entry.id)
+                require(!entry.isDirectory) { "Layer image is not a file." }
+                require(entry.size == null || entry.size in 0..MAX_ASSET_BYTES) { "layer image exceeds the supported size limit." }
+                val uri = entry.uri
                 val png = readPngInfo(uri, "Layer “${layer.name}”")
                 require(png.bitDepth <= 8) { "The PNG bit depth for layer “${layer.name}” exceeds the supported range." }
                 imageUris[filename] = uri
@@ -143,17 +204,32 @@ class CompProjectReader(private val context: Context) {
             }
             layer.maskFile?.let { filename ->
                 val entry = imageEntries[filename] ?: throw IllegalArgumentException("Mask file is missing for layer “${layer.name}”.")
-                require(entry.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) { "Layer mask is not a file." }
-                requireWithinLimit(entry, MAX_ASSET_BYTES, "layer mask")
-                val png = readPngInfo(documentUri(treeUri, entry.id), "Layer “${layer.name}” mask")
+                require(!entry.isDirectory) { "Layer mask is not a file." }
+                require(entry.size == null || entry.size in 0..MAX_ASSET_BYTES) { "layer mask exceeds the supported size limit." }
+                val png = readPngInfo(entry.uri, "Layer “${layer.name}” mask")
                 require(png.bitDepth <= 8 && png.colorType == 0) { "The mask for layer “${layer.name}” is not an 8-bit grayscale PNG." }
-                maskUris[filename] = documentUri(treeUri, entry.id)
+                maskUris[filename] = entry.uri
                 maskSizes[filename] = PixelSize(png.width, png.height)
             }
         }
         return Project(
-            version, documentId, width, height, resolution, activeLayer, layers,
-            imageUris, imageSizes, maskUris, maskSizes, manifest
+            sourceUri = sourceUri,
+            packageFolderName = packageFolderName,
+            formatVersion = version,
+            documentId = documentId,
+            width = width,
+            height = height,
+            resolution = resolution,
+            activeLayerId = activeLayer,
+            layers = layers,
+            imageUris = imageUris,
+            imageSizes = imageSizes,
+            maskUris = maskUris,
+            maskSizes = maskSizes,
+            packageAssets = packageAssets,
+            originalManifestBytes = manifestBytes.copyOf(),
+            originalManifest = manifest,
+            archiveCacheDirectory = archiveCacheDirectory
         )
     }
 
@@ -381,6 +457,12 @@ class CompProjectReader(private val context: Context) {
         val output = ByteArrayOutputStream()
         context.contentResolver.openInputStream(uri)?.use { input -> copyLimited(input, output, maximum.toLong()) }
             ?: throw IllegalArgumentException("Could not open the project manifest.")
+        return output.toByteArray()
+    }
+
+    private fun readLimited(input: InputStream, maximum: Int): ByteArray {
+        val output = ByteArrayOutputStream()
+        copyLimited(input, output, maximum.toLong())
         return output.toByteArray()
     }
 

@@ -18,19 +18,39 @@ object ReferencePngWriter {
             "Pixel buffer is shorter than its declared layout."
         }
 
+        val rowBytes = Math.multiplyExact(layout.width, PixelBufferLayout.BYTES_PER_PIXEL)
+        writeRgba8PremultipliedRows(output, layout.width, layout.height) { y, row ->
+            val sourceOffset = Math.multiplyExact(y, layout.rowStrideBytes)
+            val sourceEnd = Math.addExact(sourceOffset, rowBytes)
+            pixels.copyInto(row, endIndex = sourceEnd, startIndex = sourceOffset, destinationOffset = 0)
+        }
+    }
+
+    /** Writes one premultiplied RGBA8/sRGB row at a time to keep image-sized buffers out of memory. */
+    fun writeRgba8PremultipliedRows(
+        output: OutputStream,
+        width: Int,
+        height: Int,
+        fillRow: (rowIndex: Int, destination: ByteArray) -> Unit
+    ) {
+        require(width > 0 && height > 0) { "PNG dimensions must be positive." }
+        val pixelRowBytes = Math.multiplyExact(width, PixelBufferLayout.BYTES_PER_PIXEL)
+
         output.write(PNG_SIGNATURE)
-        writeChunk(output, IHDR, header(layout.width, layout.height))
+        writeChunk(output, IHDR, header(width, height))
         writeChunk(output, SRGB, byteArrayOf(0))
 
-        val row = ByteArray(Math.addExact(Math.multiplyExact(layout.width, PixelBufferLayout.BYTES_PER_PIXEL), 1))
+        val pixels = ByteArray(pixelRowBytes)
+        val row = ByteArray(Math.addExact(pixelRowBytes, 1))
         val compressed = ByteArray(COMPRESSED_BUFFER_SIZE)
         val deflater = Deflater(Deflater.DEFAULT_COMPRESSION)
         try {
-            for (y in 0 until layout.height) {
+            for (y in 0 until height) {
+                fillRow(y, pixels)
                 row[0] = 0 // PNG filter: None
-                var sourceIndex = y * layout.rowStrideBytes
                 var outputIndex = 1
-                repeat(layout.width) {
+                var sourceIndex = 0
+                repeat(width) {
                     val alpha = pixels[sourceIndex + 3].toInt() and 0xff
                     for (channel in 0..2) {
                         val premultiplied = pixels[sourceIndex + channel].toInt() and 0xff
