@@ -24,6 +24,7 @@ internal class LayerEditingSession(
     maxCachedBytes: Long
 ) : Closeable {
     private val source = ProjectPngTileSource(context.applicationContext, imageUri, width, height)
+    private val applicationContext = context.applicationContext
     private val rasterCacheBudgetBytes = maxCachedBytes / RASTER_BUDGET_DIVISOR
     private val historySnapshotBudgetBytes = maxCachedBytes / HISTORY_BUDGET_DIVISOR
 
@@ -47,6 +48,11 @@ internal class LayerEditingSession(
     }
 
     fun closeSource() = source.closeSource()
+
+    fun freezeForRecovery(maxBytes: Long): FrozenLayerExport {
+        val edits = raster.freezeCommitted(maxBytes)
+        return FrozenLayerExport(ProjectPngTileSource(applicationContext, imageUri, raster.width, raster.height), edits)
+    }
 
     fun writePng(
         output: OutputStream,
@@ -103,8 +109,21 @@ internal class LayerEditingSession(
     }
 }
 
+internal class FrozenLayerExport(
+    private val source: ProjectPngTileSource,
+    private val edits: com.wonderassembly.compositor.core.FrozenRasterEdits
+) : Closeable {
+    val retainedBytes: Long get() = edits.retainedBytes
+    fun writePng(output: OutputStream) {
+        try { source.writeRows(output, { false }, {}, edits::copyRowOnto) }
+        finally { source.closeSource() }
+    }
+    override fun close() = source.close()
+
+}
+
 /** Reads exact source PNG rectangles as premultiplied RGBA8 chunks on demand. */
-private class ProjectPngTileSource(
+internal class ProjectPngTileSource(
     context: Context,
     private val uri: Uri,
     private val width: Int,
@@ -147,6 +166,11 @@ private class ProjectPngTileSource(
         require(raster.width == width && raster.height == height) {
             "The edited raster dimensions do not match the source image."
         }
+        writeRows(output, isCancelled, onProgress, raster::copyCommittedRowOnto)
+    }
+
+    fun writeRows(output: OutputStream, isCancelled: () -> Boolean, onProgress: (Int) -> Unit,
+                  overlayRow: (Int, ByteArray) -> Unit) {
         val options = BitmapFactory.Options().apply {
             inPreferredConfig = Bitmap.Config.ARGB_8888
             inScaled = false
@@ -189,7 +213,7 @@ private class ProjectPngTileSource(
                     row[destinationIndex + 3] = alpha.toByte()
                     destinationIndex += PixelBufferLayout.BYTES_PER_PIXEL
                 }
-                raster.copyCommittedRowOnto(y, row)
+                overlayRow(y, row)
                 if (y % 32 == 0) onProgress((y + 1) * 90 / height)
             }
         } finally {

@@ -18,7 +18,8 @@ internal class CompProjectArchiveWriter(private val resolver: ContentResolver) {
         output: OutputStream,
         project: CompProjectReader.Project,
         editedAssets: Map<String, LayerEditingSession>,
-        isCancelled: () -> Boolean = { Thread.currentThread().isInterrupted }
+        isCancelled: () -> Boolean = { Thread.currentThread().isInterrupted },
+        frozenAssets: Map<String, FrozenLayerExport> = emptyMap()
     ) {
         val root = "${safePackageBase(project.packageFolderName)}.comp/"
         require(project.originalManifestBytes.size <= MAX_MANIFEST_BYTES) {
@@ -28,7 +29,7 @@ internal class CompProjectArchiveWriter(private val resolver: ContentResolver) {
         require(assetsByName.size == project.packageAssets.size) {
             "The project assets contain duplicate names."
         }
-        for (assetName in editedAssets.keys) {
+        for (assetName in editedAssets.keys + frozenAssets.keys) {
             require(assetsByName[assetName]?.isDirectory == false) {
                 "An edited layer image is missing from the project package."
             }
@@ -57,9 +58,10 @@ internal class CompProjectArchiveWriter(private val resolver: ContentResolver) {
                 zip.putNextEntry(ZipEntry(entryName).apply { time = 0L })
                 try {
                     val edited = editedAssets[asset.name]
-                    if (edited != null) {
+                    val frozen = frozenAssets[asset.name]
+                    if (edited != null || frozen != null) {
                         val limited = LimitedEntryOutputStream(zip, MAX_ASSET_BYTES)
-                        edited.writePng(limited, isCancelled)
+                        if (frozen != null) frozen.writePng(limited) else requireNotNull(edited).writePng(limited, isCancelled)
                         limited.flush()
                     } else {
                         val input = resolver.openInputStream(asset.uri)

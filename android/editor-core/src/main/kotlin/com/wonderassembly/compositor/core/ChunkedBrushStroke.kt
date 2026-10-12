@@ -42,6 +42,12 @@ class RasterChunkSnapshot internal constructor(
 
     fun copyPixels(): ByteArray = data.copyOf()
 
+    internal fun copyRowOnto(y: Int, destination: ByteArray) {
+        if (y < bounds.top || y >= bounds.top + bounds.height) return
+        val start = (y - bounds.top) * bounds.rowStrideBytes
+        data.copyInto(destination, bounds.left * PixelBufferLayout.BYTES_PER_PIXEL, start, start + bounds.rowStrideBytes)
+    }
+
     internal fun contentEquals(other: RasterChunkSnapshot): Boolean =
         bounds == other.bounds && data.contentEquals(other.data)
 
@@ -79,6 +85,14 @@ class ChunkedRaster(
     private var cachedBytes = 0L
 
     val hasCommittedChanges: Boolean get() = committedChunks.isNotEmpty()
+
+    /** Captured on the editor thread, never while a transaction is modifying these chunks. */
+    fun freezeCommitted(maxBytes: Long): FrozenRasterEdits {
+        check(activeToken == null) { "An active stroke cannot be captured for recovery." }
+        val bytes = committedChunks.sumOf { chunks.getValue(it).bounds.byteCount.toLong() }
+        require(bytes <= maxBytes) { "The recovery snapshot exceeds the available memory budget." }
+        return FrozenRasterEdits(width, height, committedChunkSnapshots(), bytes)
+    }
 
     init {
         require(width > 0 && height > 0) { "Raster dimensions must be positive." }
@@ -252,6 +266,19 @@ class ChunkedRaster(
     companion object {
         const val DEFAULT_CHUNK_SIZE = 256
         private const val MAX_CHUNK_SIZE = 1024
+    }
+}
+
+/** Immutable edit payload for a background save while the editor continues working. */
+class FrozenRasterEdits internal constructor(
+    val width: Int,
+    val height: Int,
+    private val chunks: List<RasterChunkSnapshot>,
+    val retainedBytes: Long
+) {
+    fun copyRowOnto(y: Int, destination: ByteArray) {
+        require(y in 0 until height && destination.size >= Math.multiplyExact(width, 4))
+        chunks.forEach { it.copyRowOnto(y, destination) }
     }
 }
 

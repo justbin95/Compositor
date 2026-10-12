@@ -77,12 +77,30 @@ class MainActivity : Activity() {
     private var exportTask: ExportTask? = null
     private var exportFlowActive = false
     private var projectOpenInProgress = false
+    private lateinit var recoveryStatusText: TextView
+    private val recoveryHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var recoveryTask: RecoveryTask? = null
+    private var recoveryDocumentId: String? = null
+    private var recoveryRevision = 0L
+    private var recoveredRevision = -1L
+    private var recoveryEpoch = java.util.UUID.randomUUID().toString()
+    private val recoveryTick = object : Runnable {
+        override fun run() {
+            requestInternalRecovery()
+            recoveryHandler.postDelayed(this, 30_000)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val retained = lastNonConfigurationInstance as? RetainedLayerSessions
         layerEditingSessions = retained?.sessions ?: linkedMapOf()
         documentStructureChanged = retained?.structureChanged ?: false
+        recoveryTask = retained?.recoveryTask
+        recoveryDocumentId = retained?.recoveryDocumentId
+        recoveryRevision = retained?.recoveryRevision ?: 0L
+        recoveredRevision = retained?.recoveredRevision ?: -1L
+        recoveryEpoch = retained?.recoveryEpoch ?: recoveryEpoch
         documentHistory = retained?.history ?: com.wonderassembly.compositor.core.DocumentHistory(
             runCatching { AndroidRasterBudget.capture(this).maxEditableDocumentBytes / 12L }.getOrDefault(0L))
         pendingLayerExport = retained?.pendingExport
@@ -115,6 +133,19 @@ class MainActivity : Activity() {
             else loadProjectFolder(restoredUri, restoringState = true)
         }
         exportTask?.let(::monitorExportTask)
+        recoveryTask?.let(::monitorRecoveryTask)
+        if (retained == null) offerInternalRecovery()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        recoveryHandler.postDelayed(recoveryTick, 30_000)
+    }
+
+    override fun onStop() {
+        recoveryHandler.removeCallbacks(recoveryTick)
+        requestInternalRecovery()
+        super.onStop()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -132,6 +163,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        recoveryHandler.removeCallbacksAndMessages(null)
         previewRequestId.incrementAndGet()
         projectOpenRequestId.incrementAndGet()
         if (!isChangingConfigurations) exportTask?.cancel()
@@ -140,7 +172,7 @@ class MainActivity : Activity() {
         if (!isChangingConfigurations) {
             val sessions = layerEditingSessions.values.toList()
             val project = currentProject
-            val release = { sessions.forEach { it.close() }; project?.releasePrivateAssets(); Unit }
+            val release = { sessions.forEach { it.close() }; project?.let(RecoveryTask::releaseProjectWhenFinished); Unit }
             exportTask?.releaseWhenFinished(release) ?: release()
         }
         super.onDestroy()
@@ -148,7 +180,8 @@ class MainActivity : Activity() {
 
     override fun onRetainNonConfigurationInstance(): Any =
         RetainedLayerSessions(layerEditingSessions, pendingLayerExport, pendingProjectArchive, currentProject,
-            pendingCanvasExport, exportTask, documentStructureChanged, documentHistory)
+            pendingCanvasExport, exportTask, documentStructureChanged, documentHistory,
+            recoveryTask, recoveryDocumentId, recoveryRevision, recoveredRevision, recoveryEpoch)
 
     private fun buildHome() {
         val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -196,6 +229,7 @@ class MainActivity : Activity() {
 
         introText = text(getString(R.string.app_intro), 16, secondaryText)
         statusText = text(getString(R.string.choose_project_status), 15, secondaryText)
+        recoveryStatusText = text(getString(R.string.recovery_initial_status), 14, secondaryText)
 
         projectSummaryText = text("", 15, primaryText)
         projectSummaryText.setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -211,6 +245,7 @@ class MainActivity : Activity() {
             documentHistory.record(DocumentEdit.Stroke(layerId, patch), patch.retainedSnapshotBytes)
         }
         canvasPreviewView.onBrushStrokeCommitted = { layerName ->
+            markRecoveryEdited()
             statusText.text = getString(R.string.brush_stroke_committed_status, layerName)
         }
         canvasPreviewView.onBrushStrokeCancelled = {
@@ -314,6 +349,7 @@ class MainActivity : Activity() {
         }
         canvasToolRow.addView(compositeButton)
         addImageButton = toolButton(getString(R.string.canvas_tool_add_image)) { chooseImage(append = true) }
+        canvasToolRow.addView(toolButton(getString(R.string.recovery_copies_button)) { showRecoveryCopies() })
         canvasToolRow.addView(addImageButton)
         canvasToolScroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -351,6 +387,7 @@ class MainActivity : Activity() {
         root.addView(details, matchWidth())
         details.addView(introText.withTopMargin(4))
         details.addView(statusText.withTopMargin(10))
+        details.addView(recoveryStatusText.withTopMargin(4))
         details.addView(projectSummaryText.withTopMargin(10))
         details.addView(canvasTitle.withTopMargin(14))
         details.addView(canvasToolScroller.withTopMargin(4))
@@ -375,6 +412,7 @@ class MainActivity : Activity() {
         }
         workspace.addView(previewPanel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.35f))
         previewPanel.addView(statusText.withTopMargin(2))
+        previewPanel.addView(recoveryStatusText.withTopMargin(4))
         previewPanel.addView(projectSummaryText.withTopMargin(6))
         previewPanel.addView(canvasTitle.withTopMargin(8))
         previewPanel.addView(canvasToolScroller.withTopMargin(4))
@@ -409,13 +447,15 @@ class MainActivity : Activity() {
                 getString(R.string.open_project_folder_option),
                 getString(R.string.open_project_archive_option),
                 getString(R.string.open_image_option),
-                getString(R.string.new_project_option)
+                getString(R.string.new_project_option),
+                getString(R.string.recovery_copies_button)
             )) { _, choice ->
                 when (choice) {
                     0 -> chooseProjectFolder()
                     1 -> chooseProjectArchive()
                     2 -> chooseImage()
-                    else -> showNewProjectDialog()
+                    3 -> showNewProjectDialog()
+                    else -> showRecoveryCopies()
                 }
             }
             .show()
@@ -556,7 +596,7 @@ class MainActivity : Activity() {
                 previewRequestId.incrementAndGet()
                 canvasPreviewView.clear(getString(R.string.choose_project_status))
                 clearLayerEditingSessions()
-                previousProject?.releasePrivateAssets()
+                previousProject?.let(RecoveryTask::releaseProjectWhenFinished)
                 documentStructureChanged = true
                 selectedProjectUri = completed.sourceUri
                 selectedProjectIsArchive = false
@@ -564,6 +604,7 @@ class MainActivity : Activity() {
                 selectedLayerId = completed.activeLayerId
                 savedLayerScrollPosition = 0
                 showProject(completed)
+                requestInternalRecovery()
             }
         }
     }
@@ -685,7 +726,7 @@ class MainActivity : Activity() {
                     previewRequestId.incrementAndGet()
                     canvasPreviewView.clear(getString(R.string.choose_project_status))
                     clearLayerEditingSessions()
-                    previousProject?.releasePrivateAssets()
+                    previousProject?.let(RecoveryTask::releaseProjectWhenFinished)
                     documentStructureChanged = false
                     try {
                         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -756,7 +797,7 @@ class MainActivity : Activity() {
                 previewRequestId.incrementAndGet()
                 canvasPreviewView.clear(getString(R.string.choose_project_status))
                 clearLayerEditingSessions()
-                previousProject?.releasePrivateAssets()
+                previousProject?.let(RecoveryTask::releaseProjectWhenFinished)
                 documentStructureChanged = importImage
                 if (!restoringState) {
                     try {
@@ -772,6 +813,7 @@ class MainActivity : Activity() {
                 selectedProjectIsImage = importImage
                 showProject(project)
                 if (importImage) statusText.text = getString(R.string.image_import_complete_status)
+                if (importImage) requestInternalRecovery()
             }
         }
     }
@@ -822,9 +864,11 @@ class MainActivity : Activity() {
                         return@runOnUiThread
                     }
                     documentStructureChanged = true
+                    markRecoveryEdited()
                     if (exportTask?.result != null) exportTask = null
                     selectedLayerId = completed.activeLayerId
                     showProject(completed)
+                    requestInternalRecovery()
                 }
             }
         }
@@ -853,6 +897,12 @@ class MainActivity : Activity() {
     }
 
     private fun showProject(project: CompProjectReader.Project) {
+        if (recoveryDocumentId != project.documentId) {
+            recoveryDocumentId = project.documentId
+            recoveryRevision = 0L
+            recoveredRevision = -1L
+            recoveryStatusText.text = getString(R.string.recovery_initial_status)
+        }
         currentProject = project
         setProjectOpenActive(false)
         statusText.text = getString(R.string.project_opened_status)
@@ -1260,6 +1310,7 @@ class MainActivity : Activity() {
     private fun setExportFlowActive(active: Boolean) {
         exportFlowActive = active
         updateExportFlowControls()
+        if (!active) requestInternalRecovery()
     }
 
     private fun setProjectOpenActive(active: Boolean) {
@@ -1352,6 +1403,7 @@ class MainActivity : Activity() {
             }
             val edit = if (redo) documentHistory.redo(apply) else documentHistory.undo(apply)
             if (edit == null) return
+            markRecoveryEdited()
             if (exportTask?.result != null) exportTask = null
             if (edit !is DocumentEdit.Stroke || !canvasPreviewView.refreshHistoryLayer(edit.layerId, edit.patch)) {
                 previewRequestId.incrementAndGet()
@@ -1371,9 +1423,147 @@ class MainActivity : Activity() {
         layerEditingSessions.values.forEach { runCatching { it.close() } }
         layerEditingSessions.clear()
         documentHistory.clear()
+        recoveryDocumentId = null
+        recoveryRevision = 0L
+        recoveredRevision = -1L
+        recoveryEpoch = java.util.UUID.randomUUID().toString()
     }
 
+    private fun requestInternalRecovery(force: Boolean = false) {
+        val project = currentProject ?: return
+        if (project.documentId != recoveryDocumentId || projectOpenInProgress || exportFlowActive ||
+            canvasPreviewView.hasActiveStroke || recoveryTask?.result == null && recoveryTask != null) return
+        recoveryTask?.let(::consumeRecoveryResult)
+        if (!force && recoveredRevision == recoveryRevision) return
+        val frozen = linkedMapOf<String, FrozenLayerExport>()
+        try {
+            val budget = AndroidRasterBudget.capture(this)
+            var remaining = budget.maxEditableDocumentBytes / 6L
+            for (layer in project.layers) {
+                val filename = layer.imageFile ?: continue
+                val session = layerEditingSessions[layerEditingSessionKey(selectedProjectUri, project, layer)] ?: continue
+                if (!session.hasCommittedChanges || filename in frozen) continue
+                val stripBytes = session.raster.width.toLong() * 16 * 8 +
+                    com.wonderassembly.compositor.core.ReferencePngWriter.rowEncodingWorkingBytes(session.raster.width)
+                require(stripBytes <= budget.maxSingleBitmapBytes) { getString(R.string.recovery_budget_failure) }
+                val captured = session.freezeForRecovery(remaining)
+                frozen[filename] = captured
+                remaining -= captured.retainedBytes
+            }
+            val task = RecoveryTask(applicationContext, project, recoveryRevision, recoveryEpoch, frozen, RecoveryTask.store(this))
+            recoveryTask = task
+            recoveryStatusText.text = getString(R.string.recovery_saving_status)
+            task.start()
+            monitorRecoveryTask(task)
+        } catch (error: Exception) {
+            frozen.values.forEach { runCatching { it.close() } }
+            recoveryStatusText.text = getString(R.string.recovery_failed_status, error.message.orEmpty())
+        } catch (_: OutOfMemoryError) {
+            frozen.values.forEach { runCatching { it.close() } }
+            recoveryStatusText.text = getString(R.string.recovery_failed_status, getString(R.string.recovery_budget_failure))
+        }
+    }
+
+    private fun markRecoveryEdited() {
+        recoveryRevision++
+        recoveryTask?.takeIf { it.result != null }?.let(::consumeRecoveryResult)
+    }
+
+    private fun monitorRecoveryTask(task: RecoveryTask) {
+        if (isDestroyed || recoveryTask !== task) return
+        if (task.result == null) recoveryHandler.postDelayed({ monitorRecoveryTask(task) }, 250)
+        else consumeRecoveryResult(task)
+    }
+
+    private fun consumeRecoveryResult(task: RecoveryTask) {
+        val result = task.result ?: return
+        if (currentProject?.documentId != task.project.documentId || recoveryEpoch != task.epoch) return
+        if (result.saved != null) {
+            recoveredRevision = task.revision
+            recoveryStatusText.text = getString(R.string.recovery_saved_status, recoveryTime(result.saved.time))
+            if (recoveryRevision != task.revision) recoveryStatusText.append(" " + getString(R.string.recovery_newer_edits_status))
+            if (result.cleanupFailed) recoveryStatusText.append(" " + getString(R.string.recovery_cleanup_failed_status))
+        } else recoveryStatusText.text = getString(R.string.recovery_failed_status, result.failure.orEmpty())
+    }
+
+    private fun offerInternalRecovery() {
+        val store = RecoveryTask.store(this)
+        worker.execute {
+            val copies = runCatching {
+                if (!RecoveryTask.isRunning) store.cleanupPending()
+                store.copies()
+            }.getOrDefault(emptyList())
+            if (copies.isEmpty()) return@execute
+            runOnUiThread {
+                fun offer() {
+                    if (isFinishing || isDestroyed) return
+                    if (projectOpenInProgress) {
+                        recoveryHandler.postDelayed({ offer() }, 500)
+                        return
+                    }
+                    AlertDialog.Builder(this).setTitle(R.string.recovery_available_title)
+                        .setMessage(getString(R.string.recovery_offer_message, recoveryTime(copies.first().time)))
+                        .setNegativeButton(R.string.recovery_later, null)
+                        .setPositiveButton(R.string.recovery_copies_button) { _, _ -> showRecoveryCopies() }.show()
+                }
+                offer()
+            }
+        }
+    }
+
+    private fun showRecoveryCopies() {
+        if (projectOpenInProgress || exportFlowActive) return
+        val store = RecoveryTask.store(this)
+        worker.execute {
+            val copies = runCatching { store.copies() }.getOrDefault(emptyList())
+            val rows = copies.map { copy ->
+                getString(R.string.recovery_copy_row, recoveryTime(copy.time),
+                    copy.projectName() ?: getString(R.string.recovery_project_name_fallback), copy.bytes / 1024)
+            }.toTypedArray()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val dialog = AlertDialog.Builder(this).setTitle(R.string.recovery_copies_title)
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setNeutralButton(R.string.recovery_save_now) { _, _ -> requestInternalRecovery(force = true) }
+                if (copies.isEmpty()) dialog.setMessage(R.string.recovery_no_copies_message)
+                else dialog.setItems(rows) { _, index -> chooseRecoveryCopy(copies[index]) }
+                dialog.show()
+            }
+        }
+    }
+
+    private fun chooseRecoveryCopy(copy: RecoveryStore.Copy) {
+        AlertDialog.Builder(this).setTitle(R.string.recovery_copy_title)
+            .setMessage(getString(R.string.recovery_restore_message, recoveryTime(copy.time)))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.recovery_restore_button) { _, _ ->
+                val restore = { loadProjectArchive(Uri.fromFile(copy.file)); Unit }
+                if (documentStructureChanged || layerEditingSessions.values.any { it.hasCommittedChanges }) {
+                    AlertDialog.Builder(this).setTitle(R.string.open_unsaved_title).setMessage(R.string.open_unsaved_message)
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .setPositiveButton(R.string.open_unsaved_continue) { _, _ -> restore() }.show()
+                } else restore()
+            }
+            .setNeutralButton(R.string.recovery_delete_button) { _, _ ->
+                AlertDialog.Builder(this).setTitle(R.string.recovery_delete_button)
+                    .setMessage(R.string.recovery_delete_message).setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(R.string.recovery_delete_button) { _, _ ->
+                        worker.execute {
+                            val deleted = runCatching { RecoveryTask.store(this).delete(copy) }.getOrDefault(false)
+                            runOnUiThread {
+                                if (!isDestroyed) recoveryStatusText.text = getString(
+                                    if (deleted) R.string.recovery_deleted_status else R.string.recovery_delete_failed_status)
+                            }
+                        }
+                    }.show()
+            }.show()
+    }
+
+    private fun recoveryTime(time: Long): String = java.text.DateFormat.getDateTimeInstance(
+        java.text.DateFormat.SHORT, java.text.DateFormat.MEDIUM).format(java.util.Date(time))
+
     private fun cleanupOrphanedArchiveImports() {
+        if (RecoveryTask.isRunning) return
         cacheDir.listFiles()
             ?.filter { (it.isDirectory && it.name.startsWith(ARCHIVE_CACHE_PREFIX)) ||
                 (it.isFile && it.name.startsWith("compositor-export-") && it.extension == "tmp") }
@@ -1426,7 +1616,12 @@ class MainActivity : Activity() {
         val pendingCanvasExport: PendingCanvasExport?,
         val exportTask: ExportTask?,
         val structureChanged: Boolean,
-        val history: com.wonderassembly.compositor.core.DocumentHistory<DocumentEdit>
+        val history: com.wonderassembly.compositor.core.DocumentHistory<DocumentEdit>,
+        val recoveryTask: RecoveryTask?,
+        val recoveryDocumentId: String?,
+        val recoveryRevision: Long,
+        val recoveredRevision: Long,
+        val recoveryEpoch: String
     )
 
     private data class PendingCanvasExport(

@@ -143,4 +143,27 @@
     <string name="document_redone_status">Document edit redone.</string>
     <string name="document_history_failed_status">The document history could not be applied.</string>
     <string name="document_history_memory_status">There is not enough memory to update the document history.</string>
+    <string name="recovery_initial_status">Internal recovery: no copy saved in this session.</string>
+    <string name="recovery_saving_status">Saving an internal recovery copy. Editing can continue.</string>
+    <string name="recovery_saved_status">Internal recovery saved at %1$s. Use Save Copy for your own project file.</string>
+    <string name="recovery_failed_status">Internal recovery failed: %1$s. Previous copies and current edits are retained.</string>
+    <string name="recovery_budget_failure">There is not enough safe memory to capture recovery pixels.</string>
+    <string name="recovery_newer_edits_status">Newer edits are not in this copy.</string>
+    <string name="recovery_cleanup_failed_status">Some older internal copies could not be cleaned up.</string>
+    <string name="recovery_copies_button">Recovery Copies</string>
+    <string name="recovery_copies_title">Internal Recovery Copies</string>
+    <string name="recovery_available_title">Recovery Copies Available</string>
+    <string name="recovery_offer_message">An internal copy was saved at %1$s. Review copies to restore one. Undo history is not restored.</string>
+    <string name="recovery_later">Later</string>
+    <string name="recovery_save_now">Save Current Recovery Copy</string>
+    <string name="recovery_no_copies_message">No internal copies yet. Copies are stored only in this app and may be lost if you clear app data or uninstall. Use Save Copy for a project you want to keep.</string>
+    <string name="recovery_copy_row">%1$s · %2$s · %3$d KiB</string>
+    <string name="recovery_project_name_fallback">Project</string>
+    <string name="recovery_copy_title">Internal Recovery Copy</string>
+    <string name="recovery_restore_message">Restore the copy saved at %1$s? It contains completed edits only. Undo history is not restored. Use Save Copy to keep a separate project file. Internal copies may be lost if you clear app data or uninstall.</string>
+    <string name="recovery_restore_button">Restore Copy</string>
+    <string name="recovery_delete_button">Delete Internal Copy</string>
+    <string name="recovery_delete_message">Delete this internal recovery copy? This does not delete your manually saved project files.</string>
+    <string name="recovery_deleted_status">Internal recovery copy deleted.</string>
+    <string name="recovery_delete_failed_status">The internal recovery copy could not be deleted.</string>
 </resources>
