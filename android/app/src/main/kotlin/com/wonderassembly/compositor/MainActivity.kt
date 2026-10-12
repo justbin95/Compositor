@@ -62,6 +62,7 @@ class MainActivity : Activity() {
     private lateinit var addImageButton: Button
     private lateinit var eraserButton: Button
     private lateinit var brushSettingsButton: Button
+    private lateinit var documentHistory: com.wonderassembly.compositor.core.DocumentHistory<DocumentEdit>
     private var documentStructureChanged = false
     private var currentProject: CompProjectReader.Project? = null
     private var selectedProjectUri: Uri? = null
@@ -82,6 +83,8 @@ class MainActivity : Activity() {
         val retained = lastNonConfigurationInstance as? RetainedLayerSessions
         layerEditingSessions = retained?.sessions ?: linkedMapOf()
         documentStructureChanged = retained?.structureChanged ?: false
+        documentHistory = retained?.history ?: com.wonderassembly.compositor.core.DocumentHistory(
+            runCatching { AndroidRasterBudget.capture(this).maxEditableDocumentBytes / 12L }.getOrDefault(0L))
         pendingLayerExport = retained?.pendingExport
         pendingProjectArchive = retained?.pendingProjectArchive
         pendingCanvasExport = retained?.pendingCanvasExport
@@ -145,7 +148,7 @@ class MainActivity : Activity() {
 
     override fun onRetainNonConfigurationInstance(): Any =
         RetainedLayerSessions(layerEditingSessions, pendingLayerExport, pendingProjectArchive, currentProject,
-            pendingCanvasExport, exportTask, documentStructureChanged)
+            pendingCanvasExport, exportTask, documentStructureChanged, documentHistory)
 
     private fun buildHome() {
         val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -203,6 +206,10 @@ class MainActivity : Activity() {
         canvasTitle.visibility = View.GONE
 
         canvasPreviewView = CanvasPreviewView(this).apply { visibility = View.GONE }
+        canvasPreviewView.recordStroke = { layerId, patch ->
+            refreshHistoryBudget()
+            documentHistory.record(DocumentEdit.Stroke(layerId, patch), patch.retainedSnapshotBytes)
+        }
         canvasPreviewView.onBrushStrokeCommitted = { layerName ->
             statusText.text = getString(R.string.brush_stroke_committed_status, layerName)
         }
@@ -222,12 +229,6 @@ class MainActivity : Activity() {
         canvasPreviewView.onBrushHistoryChanged = { updateBrushHistoryButtons() }
         canvasPreviewView.onBrushHistoryLimitReached = {
             statusText.text = getString(R.string.brush_history_budget_exceeded_status)
-        }
-        canvasPreviewView.onBrushStrokeUndone = {
-            statusText.text = getString(R.string.brush_stroke_undone_status)
-        }
-        canvasPreviewView.onBrushStrokeRedone = {
-            statusText.text = getString(R.string.brush_stroke_redone_status)
         }
 
         canvasToolRow = LinearLayout(this).apply {
@@ -266,7 +267,7 @@ class MainActivity : Activity() {
         brushSettingsButton = toolButton(getString(R.string.brush_settings)) { showBrushSettings() }
         canvasToolRow.addView(brushSettingsButton)
         undoButton = toolButton(getString(R.string.canvas_tool_undo)) {
-            if (canvasPreviewView.undoBrushStroke()) updateCanvasTools()
+            applyDocumentHistory(redo = false)
         }
         undoButton.contentDescription = getString(R.string.canvas_tool_undo_accessibility)
         canvasToolRow.addView(undoButton, LinearLayout.LayoutParams(
@@ -274,7 +275,7 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { leftMargin = dp(4) })
         redoButton = toolButton(getString(R.string.canvas_tool_redo)) {
-            if (canvasPreviewView.redoBrushStroke()) updateCanvasTools()
+            applyDocumentHistory(redo = true)
         }
         redoButton.contentDescription = getString(R.string.canvas_tool_redo_accessibility)
         canvasToolRow.addView(redoButton, LinearLayout.LayoutParams(
@@ -811,7 +812,17 @@ class MainActivity : Activity() {
                 } else {
                     previewRequestId.incrementAndGet()
                     canvasPreviewView.clear(getString(R.string.choose_project_status))
+                    val edit = DocumentEdit.Append(base, completed, selectedLayerId, documentStructureChanged)
+                    val bytes = base.originalManifestBytes.size.toLong() + completed.originalManifestBytes.size
+                    refreshHistoryBudget()
+                    if (!documentHistory.record(edit, bytes)) {
+                        imported?.releasePrivateAssets()
+                        showProject(base)
+                        statusText.text = getString(R.string.brush_history_budget_exceeded_status)
+                        return@runOnUiThread
+                    }
                     documentStructureChanged = true
+                    if (exportTask?.result != null) exportTask = null
                     selectedLayerId = completed.activeLayerId
                     showProject(completed)
                 }
@@ -1065,8 +1076,8 @@ class MainActivity : Activity() {
 
     private fun updateBrushHistoryButtons() {
         if (!::undoButton.isInitialized || !::redoButton.isInitialized) return
-        undoButton.isEnabled = !exportFlowActive && !projectOpenInProgress && canvasPreviewView.canUndoBrushStroke
-        redoButton.isEnabled = !exportFlowActive && !projectOpenInProgress && canvasPreviewView.canRedoBrushStroke
+        undoButton.isEnabled = !exportFlowActive && !projectOpenInProgress && (!canvasPreviewView.hasActiveStroke && documentHistory.canUndo)
+        redoButton.isEnabled = !exportFlowActive && !projectOpenInProgress && (!canvasPreviewView.hasActiveStroke && documentHistory.canRedo)
     }
 
     private fun requestLayerPngExport() {
@@ -1312,9 +1323,54 @@ class MainActivity : Activity() {
         layer: CompProjectReader.Layer
     ): String = "${projectUri?.toString().orEmpty()}|${project.documentId}|${layer.id}"
 
+    private fun refreshHistoryBudget() {
+        if (documentHistory.maxBytes == 0L) {
+            documentHistory = com.wonderassembly.compositor.core.DocumentHistory(
+                runCatching { AndroidRasterBudget.capture(this).maxEditableDocumentBytes / 12L }.getOrDefault(0L))
+        }
+    }
+
+    private fun applyDocumentHistory(redo: Boolean) {
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke) return
+        val project = currentProject ?: return
+        try {
+            val apply: (DocumentEdit) -> Unit = { edit ->
+                when (edit) {
+                    is DocumentEdit.Stroke -> {
+                        if (redo) edit.patch.redo() else edit.patch.undo()
+                        selectedLayerId = edit.layerId
+                    }
+                    is DocumentEdit.Append -> {
+                        val target = if (redo) edit.after else edit.before
+                        // Undo hides the imported asset but retains its private files for redo and cleanup.
+                        currentProject = target.copy(additionalCacheDirectories =
+                            (target.additionalCacheDirectories + project.additionalCacheDirectories).distinct())
+                        selectedLayerId = if (redo) target.activeLayerId else edit.previousLayerId
+                        documentStructureChanged = if (redo) true else edit.previousStructureChanged
+                    }
+                }
+            }
+            val edit = if (redo) documentHistory.redo(apply) else documentHistory.undo(apply)
+            if (edit == null) return
+            if (exportTask?.result != null) exportTask = null
+            if (edit !is DocumentEdit.Stroke || !canvasPreviewView.refreshHistoryLayer(edit.layerId, edit.patch)) {
+                previewRequestId.incrementAndGet()
+                canvasPreviewView.clear(getString(R.string.choose_project_status))
+                showProject(requireNotNull(currentProject))
+            }
+            statusText.text = getString(if (redo) R.string.document_redone_status else R.string.document_undone_status)
+            updateCanvasTools()
+        } catch (error: Exception) {
+            statusText.text = error.message ?: getString(R.string.document_history_failed_status)
+        } catch (_: OutOfMemoryError) {
+            statusText.text = getString(R.string.document_history_memory_status)
+        }
+    }
+
     private fun clearLayerEditingSessions() {
         layerEditingSessions.values.forEach { runCatching { it.close() } }
         layerEditingSessions.clear()
+        documentHistory.clear()
     }
 
     private fun cleanupOrphanedArchiveImports() {
@@ -1369,7 +1425,8 @@ class MainActivity : Activity() {
         val project: CompProjectReader.Project?,
         val pendingCanvasExport: PendingCanvasExport?,
         val exportTask: ExportTask?,
-        val structureChanged: Boolean
+        val structureChanged: Boolean,
+        val history: com.wonderassembly.compositor.core.DocumentHistory<DocumentEdit>
     )
 
     private data class PendingCanvasExport(

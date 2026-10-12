@@ -8,7 +8,6 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.net.Uri
 import com.wonderassembly.compositor.core.ChunkedRaster
-import com.wonderassembly.compositor.core.ChunkedStrokeHistory
 import com.wonderassembly.compositor.core.PixelBufferLayout
 import com.wonderassembly.compositor.core.RasterChunkBounds
 import com.wonderassembly.compositor.core.ReferencePngWriter
@@ -34,7 +33,6 @@ internal class LayerEditingSession(
         maxCachedBytes = rasterCacheBudgetBytes,
         loadChunk = source::loadChunk
     )
-    val history = ChunkedStrokeHistory(maxBytes = historySnapshotBudgetBytes)
     val hasCommittedChanges: Boolean get() = raster.hasCommittedChanges
     val canBeginStroke: Boolean = run {
         val minimumChunkSnapshotBytes = Math.multiplyExact(

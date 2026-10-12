@@ -75,8 +75,6 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     internal var onBrushError: ((String) -> Unit)? = null
     internal var onBrushHistoryChanged: (() -> Unit)? = null
     internal var onBrushHistoryLimitReached: (() -> Unit)? = null
-    internal var onBrushStrokeUndone: (() -> Unit)? = null
-    internal var onBrushStrokeRedone: (() -> Unit)? = null
 
     private val gestureDetector = GestureDetector(context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -133,14 +131,15 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     }
 
     internal val isBrushMode: Boolean get() = brushMode
-    internal val canUndoBrushStroke: Boolean
-        get() = activeBrushStroke == null && editingSession?.history?.canUndo == true
-    internal val canRedoBrushStroke: Boolean
-        get() = activeBrushStroke == null && editingSession?.history?.canRedo == true
+    internal val hasActiveStroke: Boolean get() = activeBrushStroke != null
+    internal var recordStroke: ((String, com.wonderassembly.compositor.core.ChunkedStrokePatch) -> Boolean)? = null
 
-    internal fun undoBrushStroke(): Boolean = applyBrushHistory(redo = false)
-
-    internal fun redoBrushStroke(): Boolean = applyBrushHistory(redo = true)
+    internal fun refreshHistoryLayer(layerId: String, patch: com.wonderassembly.compositor.core.ChunkedStrokePatch): Boolean {
+        if (layer?.id != layerId || editingSession == null || bitmap == null) return false
+        refreshEditedTiles(patch.changedChunkIds)
+        invalidate()
+        return true
+    }
 
     internal fun canEnableBrush(): Boolean {
         val currentLayer = layer ?: return false
@@ -320,7 +319,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
                 val patch = stroke.commit()
                 if (patch != null) {
                     val session = editingSession
-                    if (session != null && session.history.record(patch)) {
+                    if (session != null && recordStroke?.invoke(requireNotNull(layer).id, patch) == true) {
                         onBrushStrokeCommitted?.invoke(layerName)
                     } else {
                         patch.undo()
@@ -353,25 +352,6 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         onBrushHistoryChanged?.invoke()
         updateContentDescription()
         onBrushError?.invoke(error.message ?: "The brush transaction could not be completed.")
-    }
-
-    private fun applyBrushHistory(redo: Boolean): Boolean {
-        if (activeBrushStroke != null) return false
-        val session = editingSession ?: return false
-        return try {
-            val patch = if (redo) session.history.redo() else session.history.undo() ?: return false
-            if (patch == null) return false
-            refreshEditedTiles(patch.changedChunkIds)
-            onBrushHistoryChanged?.invoke()
-            if (redo) onBrushStrokeRedone?.invoke() else onBrushStrokeUndone?.invoke()
-            true
-        } catch (error: Exception) {
-            onBrushError?.invoke(error.message ?: "The brush history could not be applied.")
-            false
-        } catch (error: OutOfMemoryError) {
-            onBrushError?.invoke("There is not enough memory to update the brush history.")
-            false
-        }
     }
 
     private fun refreshEditedTiles(ids: Set<RasterChunkId>) {
