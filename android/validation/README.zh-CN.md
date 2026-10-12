@@ -1,5 +1,7 @@
 # Android 验证与接续记录
 
+最新开发：[RECOVERY06内部安全副本](recovery06-20261012.zh-CN.md)。冻结已提交像素、原子发布/轮换、恢复与清理入口；55JVM及200次Windows文件故障注入有证据，Android仪器仅编译。用户明确暂缓真机，本轮无ADB/安装，所有真实设备项记录在[待测清单](recovery06-device-checklist.zh-CN.md)，不继承旧包PASS。外部原位保存、Android恢复实测、分块与Mac未完成。
+
 最新开发阶段：[HISTORY05 文档统一历史](document-history05-20261012.zh-CN.md)。48项JVM、Lint0错误/6建议、ARM64与仪器APK构建通过；新APK身份在记录中。设备使用中，本轮不安装/切应用，设备及Mac未运行；旧LOCAL03/INPUT04证据不用于此包。安全保存、恢复、分块和完整Mac对齐仍待推进。
 
 最新设备补验：[INPUT04成功追加、历史保护与白黑背景](append-background-input04-20261012.zh-CN.md)。LOCAL03包不变，成功追加EXIF6 JPEG后旧笔迹和Undo/Redo像素保持、文档/旧层身份保留、新层居中方向正确；17×9白黑背景PNG与ZIP全部像素通过。作品副本和`.nomedia`保留；旋转未运行，其余SAF方向、预设、恢复、分块与Mac仍待推进。
