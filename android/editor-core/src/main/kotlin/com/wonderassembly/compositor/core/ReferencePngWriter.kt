@@ -6,6 +6,13 @@ import java.util.zip.Deflater
 
 /** Streams the reference compositor's top-first premultiplied RGBA pixels as a PNG. */
 object ReferencePngWriter {
+    /** Row buffers plus conservative native deflater headroom; independent of image height. */
+    fun rowEncodingWorkingBytes(width: Int): Long {
+        require(width > 0) { "PNG dimensions must be positive." }
+        val rowBytes = Math.multiplyExact(width, PixelBufferLayout.BYTES_PER_PIXEL)
+        return rowBytes.toLong() * 2L + 1L + COMPRESSED_BUFFER_SIZE + DEFLATER_HEADROOM_BYTES
+    }
+
     fun writeRgba8Premultiplied(
         output: OutputStream,
         pixels: ByteArray,
@@ -115,4 +122,5 @@ object ReferencePngWriter {
     private val IEND = byteArrayOf(0x49, 0x45, 0x4e, 0x44)
     private val EMPTY = byteArrayOf()
     private const val COMPRESSED_BUFFER_SIZE = 32 * 1024
+    private const val DEFLATER_HEADROOM_BYTES = 512L * 1024L
 }

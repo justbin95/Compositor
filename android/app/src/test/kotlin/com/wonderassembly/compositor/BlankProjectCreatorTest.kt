@@ -21,7 +21,8 @@ class BlankProjectCreatorTest {
     }
 
     @Test fun transparent2048ProjectKeepsDimensionsResolutionAndCanSaveAndReopen() {
-        val project = creator().create(2048, 2048, 144.0) { false }
+        // One MiB admits row encoding but cannot hold even one 2048 RGBA surface.
+        val project = creator(1024L * 1024).create(2048, 2048, 144.0) { false }
         assertEquals(2048, project.width)
         assertEquals(144.0, project.resolution, 0.0)
         assertEquals(project.layers.single().id, project.activeLayerId)

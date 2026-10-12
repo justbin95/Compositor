@@ -29,7 +29,9 @@ internal class BlankProjectCreator(
             "Choose positive dimensions within the project format limits."
         }
         require(resolution.isFinite() && resolution in 1.0..9600.0) { "Resolution must be between 1 and 9600 ppi." }
-        require(width.toLong() * height <= captureBudget().maxSingleBitmapBytes / 8L) {
+        // The encoder holds two rows, not two full-size raster surfaces. Preview admission
+        // is checked separately by the caller before replacing the current project.
+        require(ReferencePngWriter.rowEncodingWorkingBytes(width) <= captureBudget().maxSingleBitmapBytes) {
             "The canvas exceeds the current memory budget. Choose smaller dimensions."
         }
         fun checkCancelled() {
