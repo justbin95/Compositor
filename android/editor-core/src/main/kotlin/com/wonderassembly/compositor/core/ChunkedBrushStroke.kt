@@ -91,15 +91,18 @@ class ChunkedRaster(
     fun beginBrushStroke(
         diameterPixels: Double,
         colorArgb: Int,
-        opacity: Double = 1.0
+        opacity: Double = 1.0,
+        hardness: Double = 1.0,
+        erase: Boolean = false
     ): ChunkedBrushStroke {
         require(diameterPixels.isFinite() && diameterPixels > 0.0) { "Brush diameter must be positive." }
         require(opacity.isFinite() && opacity in 0.0..1.0) { "Brush opacity must be between 0 and 1." }
+        require(hardness.isFinite() && hardness in 0.0..1.0) { "Brush hardness must be between 0 and 1." }
         check(activeToken == null) { "A brush transaction is already active." }
         val token = nextToken
         nextToken = Math.addExact(nextToken, 1L)
         activeToken = token
-        return ChunkedBrushStroke(this, token, diameterPixels, colorArgb, opacity)
+        return ChunkedBrushStroke(this, token, diameterPixels, colorArgb, opacity, hardness, erase)
     }
 
     /** Returns committed edit chunks for display without copying the source image. */
@@ -252,13 +255,15 @@ class ChunkedRaster(
     }
 }
 
-/** One logical hard round brush stroke. It returns a chunk patch that a history stack can retain. */
+/** One logical round brush or eraser stroke, retained as a reversible chunk patch. */
 class ChunkedBrushStroke internal constructor(
     private val raster: ChunkedRaster,
     private val token: Long,
     private val diameterPixels: Double,
     private val colorArgb: Int,
-    private val opacity: Double
+    private val opacity: Double,
+    private val hardness: Double,
+    private val erase: Boolean
 ) {
     private val before = LinkedHashMap<RasterChunkId, RasterChunkSnapshot>()
     private var previousPoint: PointD? = null
@@ -320,7 +325,7 @@ class ChunkedBrushStroke internal constructor(
     }
 
     private fun stamp(centerX: Double, centerY: Double): Set<RasterChunkId> {
-        if (opacity == 0.0 || ((colorArgb ushr 24) and 0xff) == 0) return emptySet()
+        if (opacity == 0.0 || (!erase && ((colorArgb ushr 24) and 0xff) == 0)) return emptySet()
         val radius = diameterPixels / 2.0
         val left = max(0, floor(centerX - radius - 0.5).toInt())
         val top = max(0, floor(centerY - radius - 0.5).toInt())
@@ -338,7 +343,9 @@ class ChunkedBrushStroke internal constructor(
             val dy = y + 0.5 - centerY
             for (x in left until right) {
                 val dx = x + 0.5 - centerX
-                val coverage = (radius + ANTIALIAS_RADIUS - sqrt(dx * dx + dy * dy)).coerceIn(0.0, 1.0)
+                val distance = sqrt(dx * dx + dy * dy)
+                val coverage = if (hardness == 1.0) (radius + ANTIALIAS_RADIUS - distance).coerceIn(0.0, 1.0)
+                    else ((radius + ANTIALIAS_RADIUS - distance) / max(1.0, radius * (1.0 - hardness))).coerceIn(0.0, 1.0)
                 if (coverage <= 0.0) continue
                 val id = RasterChunkId(x / raster.chunkSize, y / raster.chunkSize)
                 val record = raster.mutablePixels(token, id)
@@ -350,9 +357,14 @@ class ChunkedBrushStroke internal constructor(
     }
 
     private fun compositePixel(destination: ByteArray, offset: Int, argb: Int, opacity: Double, coverage: Double) {
-        val sourceAlpha = (((argb ushr 24) and 0xff) * opacity * coverage).toInt().coerceIn(0, 255)
+        val sourceAlpha = ((if (erase) 255 else ((argb ushr 24) and 0xff)) * opacity * coverage).toInt().coerceIn(0, 255)
         if (sourceAlpha == 0) return
         val inverseAlpha = 255 - sourceAlpha
+        if (erase) {
+            for (channel in 0..3) destination[offset + channel] =
+                (((destination[offset + channel].toInt() and 0xff) * inverseAlpha + 127) / 255).toByte()
+            return
+        }
         val sourceRed = (((argb ushr 16) and 0xff) * sourceAlpha + 127) / 255
         val sourceGreen = (((argb ushr 8) and 0xff) * sourceAlpha + 127) / 255
         val sourceBlue = ((argb and 0xff) * sourceAlpha + 127) / 255

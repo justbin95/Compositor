@@ -79,8 +79,15 @@ class CompProjectReader(private val context: Context) {
         /** All original fields, including optional fields not yet modeled by Android. */
         val originalManifest: JSONObject,
         /** Private extraction backing an imported ZIP, removed when this project is replaced. */
-        val archiveCacheDirectory: File? = null
-    )
+        val archiveCacheDirectory: File? = null,
+        /** Private assets appended to a project whose original package remains read-only. */
+        val additionalCacheDirectories: List<File> = emptyList()
+    ) {
+        fun releasePrivateAssets() {
+            archiveCacheDirectory?.deleteRecursively()
+            additionalCacheDirectories.forEach { it.deleteRecursively() }
+        }
+    }
 
     private data class Entry(val id: String, val name: String, val mimeType: String, val size: Long?)
     private data class PngInfo(val width: Int, val height: Int, val bitDepth: Int, val colorType: Int)
@@ -142,7 +149,7 @@ class CompProjectReader(private val context: Context) {
         return readProject(sourceUri, packageFolderName, manifestBytes, packageAssets, cacheDirectory)
     }
 
-    private fun readProject(
+    internal fun readProject(
         sourceUri: Uri,
         packageFolderName: String,
         manifestBytes: ByteArray,

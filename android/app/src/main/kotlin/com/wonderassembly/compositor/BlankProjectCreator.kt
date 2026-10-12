@@ -8,12 +8,23 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CancellationException
 
-/** Creates a private transparent raster project; the current project is replaced only by the caller. */
+/** Creates a private raster project; the current project is replaced only by the caller. */
 internal class BlankProjectCreator(
     private val context: Context,
     private val captureBudget: () -> AndroidRasterBudget = { AndroidRasterBudget.capture(context) }
 ) {
+    enum class Background(val rgba: ByteArray) {
+        TRANSPARENT(byteArrayOf(0, 0, 0, 0)),
+        WHITE(byteArrayOf(-1, -1, -1, -1)),
+        BLACK(byteArrayOf(0, 0, 0, -1))
+    }
+
     fun create(width: Int, height: Int, resolution: Double, isCancelled: () -> Boolean): CompProjectReader.Project {
+        return create(width, height, resolution, Background.TRANSPARENT, isCancelled)
+    }
+
+    fun create(width: Int, height: Int, resolution: Double, background: Background,
+        isCancelled: () -> Boolean): CompProjectReader.Project {
         require(width in 1..30000 && height in 1..30000 && width.toLong() * height <= 100_000_000L) {
             "Choose positive dimensions within the project format limits."
         }
@@ -34,7 +45,7 @@ internal class BlankProjectCreator(
             File(images, "$id.png").outputStream().use { output ->
                 ReferencePngWriter.writeRgba8PremultipliedRows(output, width, height) { _, row ->
                     checkCancelled()
-                    row.fill(0)
+                    for (x in 0 until width) background.rgba.copyInto(row, x * 4)
                 }
             }
             val manifest = ProjectImageImporter.importedImageManifest(id, width, height).put("resolution", resolution)

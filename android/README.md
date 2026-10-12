@@ -1,5 +1,14 @@
 # Compositor for Android
 
+## Current local stage (2026-10-12)
+
+The current source includes ADB-FIX-01–03, **Add Image Layer** (PNG/JPEG appended at the canvas center without resetting existing brush sessions), new-project size presets and transparent/white/black backgrounds, configurable brush size/opacity/hardness/color and a reversible eraser. Defaults remain conservative and budget checked. Layer structure undo, document-wide history, automatic recovery, safe folder saves and tiled composition are still unfinished. Old import failures and fixed 32 px brush descriptions below are historical snapshots. See [current validation](validation/local-development-20261012.zh-CN.md) for exact checks and artifact identity; device/Mac acceptance remains pending.
+
+On Windows, `./scripts/build-local.ps1` configures the local JDK/SDK and reads `%USERPROFILE%/.android/compositor-signing/signing.json` outside Git. The four explicit `COMPOSITOR_DEBUG_*` environment variables take priority. Supply custom `-JavaHome`, `-SdkRoot`, or `-SigningConfig` paths when needed. No signing secrets are printed or stored in this repository.
+
+Prefer the original certificate `342d1ddebd6a0824589e9031328223c2887687f3f362321c54c748a079ec211a`. The user's 2026-10-12 authorization permits delivery with a persistent external test key when the original is unavailable, superseding older handoff restrictions. Record the new fingerprint, source commit and APK SHA256 and explain that a different signature normally cannot update the old installation. Preserve artwork first; never automatically uninstall or clear app data. Default INSTALL01 compatibility packaging stays enabled.
+
+
 This is a separate Android project. The original macOS Xcode project stays at the repository root.
 
 The current app can open a native `.comp` project folder or a `.comp.zip` archive through Android's system picker. ZIPs may contain one `<name>.comp/` folder or put `manifest.json` and `images/` directly at the archive root. The importer checks paths, entry types, sizes, CRCs, the manifest, layer hierarchy, and referenced PNGs, then extracts into app-private cache. A failed open leaves the currently selected project intact. The selected source folder or archive is not modified. The app then renders a bounded-resolution preview from visible pixel layers in native bottom-to-top order. It applies layer transforms, opacity, group visibility and opacity, raster masks, group masks, and clipping masks. Preview Bitmap limits and the mask cache are derived from current process and system memory headroom. Selecting a row previews that layer's source image by itself, without masks.

@@ -52,4 +52,14 @@ class BlankProjectCreatorTest {
         catch (_: CancellationException) { }
         assertEquals(before, context.cacheDir.listFiles()!!.filter { it.name.startsWith("compositor-import-") }.toSet())
     }
+
+    @Test fun solidBackgroundsHaveExactOpaquePixels() {
+        for ((background, expected) in listOf(BlankProjectCreator.Background.WHITE to -1,
+            BlankProjectCreator.Background.BLACK to 0xff000000.toInt())) {
+            val project = creator().create(17, 9, 72.0, background) { false }
+            val pixels = ImageIO.read(File(project.packageAssets.single().uri.path!!))
+            for (y in 0 until pixels.height) for (x in 0 until pixels.width) assertEquals(expected, pixels.getRGB(x, y))
+            project.releasePrivateAssets()
+        }
+    }
 }

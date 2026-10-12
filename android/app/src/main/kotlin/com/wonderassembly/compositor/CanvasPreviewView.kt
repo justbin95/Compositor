@@ -63,6 +63,11 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     private var previousPinchSpan: Double? = null
     private var panResetAnimator: ValueAnimator? = null
     private var brushMode = false
+    internal var brushDiameter = 32.0
+    internal var brushOpacity = 1.0
+    internal var brushHardness = 1.0
+    internal var brushColor = Color.BLACK
+    internal var eraser = false
     private var activeBrushStroke: ChunkedBrushStroke? = null
 
     internal var onBrushStrokeCommitted: ((String) -> Unit)? = null
@@ -273,8 +278,11 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         val start = layerPointAtView(viewX, viewY) ?: return
         try {
             val stroke = session.raster.beginBrushStroke(
-                diameterPixels = BRUSH_DIAMETER_PIXELS,
-                colorArgb = Color.BLACK
+                diameterPixels = brushDiameter,
+                colorArgb = brushColor,
+                opacity = brushOpacity,
+                hardness = brushHardness,
+                erase = eraser
             )
             activeBrushStroke = stroke
             refreshEditedTiles(stroke.addPoint(start))
@@ -839,6 +847,5 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         private const val MIN_ZOOM = 1.0
         private const val MAX_ZOOM = 12.0
         private const val PAN_RESET_DURATION_MS = 220L
-        private const val BRUSH_DIAMETER_PIXELS = 32.0
     }
 }

@@ -1,4 +1,22 @@
 <resources>
+    <string name="canvas_tool_add_image">Add Image Layer</string>
+    <string name="canvas_tool_eraser">Eraser</string>
+    <string name="canvas_tool_eraser_active">Eraser •</string>
+    <string name="brush_settings">Brush Settings</string>
+    <string name="brush_size">Size (source pixels, 1–1024)</string>
+    <string name="brush_opacity">Opacity (0–100%)</string>
+    <string name="brush_hardness">Hardness (0–100%)</string>
+    <string name="brush_color">Color (#RRGGBB or #AARRGGBB)</string>
+    <string name="brush_invalid_settings">Enter size 1–1024, opacity/hardness 0–100 and a valid hex color.</string>
+    <string name="apply_settings">Apply</string>
+    <string name="canvas_preset">Canvas preset</string>
+    <string name="canvas_background">Background</string>
+    <string-array name="canvas_presets">
+        <item>Custom</item><item>Square 2048</item><item>Landscape 1920 × 1080</item><item>Portrait 1080 × 1920</item>
+    </string-array>
+    <string-array name="canvas_backgrounds">
+        <item>Transparent</item><item>White</item><item>Black</item>
+    </string-array>
     <string name="app_name">Compositor</string>
     <plurals name="layer_count">
         <item quantity="one">%d layer</item>
@@ -27,10 +45,10 @@
     <string name="canvas_tools_description">Canvas tools</string>
     <string name="canvas_tool_navigate">Navigate</string>
     <string name="canvas_tool_navigate_active">Navigate</string>
-    <string name="canvas_tool_brush">Brush · 32 px</string>
+    <string name="canvas_tool_brush">Brush</string>
     <string name="canvas_tool_brush_active">Brush · On</string>
     <string name="canvas_tool_brush_unavailable">Brush unavailable</string>
-    <string name="canvas_tool_brush_accessibility">Black 32 px hard brush. Temporary source-pixel changes can be undone, redone, exported as a separate layer PNG, or included in a separate project ZIP copy.</string>
+    <string name="canvas_tool_brush_accessibility">Configurable brush. Use Brush Settings for size, opacity, hardness and color. Save Copy keeps committed strokes.</string>
     <string name="canvas_tool_brush_unavailable_accessibility">Brush unavailable. Select an eligible visible raster layer.</string>
     <string name="canvas_tool_undo">Undo</string>
     <string name="canvas_tool_undo_accessibility">Undo the latest temporary brush stroke.</string>
@@ -54,13 +72,13 @@
     <string name="project_open_cancelled_status">Opening was cancelled. The current project and its edits are unchanged.</string>
     <string name="image_import_loading_status">Importing the full-size image into a new project…</string>
     <string name="image_import_complete_status">Imported a new single-layer sRGB project with image orientation applied. Save a .comp.zip copy to keep it. The original image is unchanged.</string>
-    <string name="open_unsaved_title">Unsaved Brush Edits</string>
+    <string name="open_unsaved_title">Unsaved Project Changes</string>
     <string name="open_unsaved_message">Opening another project or importing an image will discard these edits after the new document loads successfully. Cancel and use Save Copy to keep them first.</string>
     <string name="open_unsaved_continue">Choose New Document</string>
     <string name="canvas_tool_export_layer_accessibility">Export source pixels from the selected layer, including temporary brush edits, as a separate PNG file.</string>
     <string name="canvas_tool_save_project_copy">Save Copy (.comp.zip)</string>
     <string name="canvas_tool_save_project_copy_accessibility">Save an independent Compositor project ZIP copy, including committed temporary brush edits. The source project folder is unchanged.</string>
-    <string name="brush_mode_enabled_status">Brush mode is on for “%1$s”. A 32 px black hard brush writes to 256 px source-image chunks. Up to 20 strokes can be undone and redone in memory; save a project copy to keep committed edits.</string>
+    <string name="brush_mode_enabled_status">Brush mode is on for “%1$s”. Use Brush Settings to change the brush. Save Copy keeps committed edits; automatic recovery is not available yet.</string>
     <string name="brush_mode_disabled_status">Canvas navigation is active.</string>
     <string name="brush_stroke_committed_status">Brush stroke applied to “%1$s” in memory. Undo and redo are available; save a project copy to keep committed edits.</string>
     <string name="brush_stroke_undone_status">The latest brush stroke was undone.</string>
@@ -120,7 +138,7 @@
     <string name="new_project_height">Height (pixels)</string>
     <string name="new_project_resolution">Resolution (ppi)</string>
     <string name="new_project_create">Create</string>
-    <string name="new_project_transparent_note">Transparent background. Use Save Copy to keep the project; automatic recovery is not available yet.</string>
+    <string name="new_project_transparent_note">Use Save Copy to keep the project; automatic recovery is not available yet.</string>
     <string name="new_project_invalid_status">Choose positive dimensions up to 30000 pixels per side and 100 million pixels total, and a resolution from 1 to 9600 ppi.</string>
     <string name="new_project_creating_status">Creating a transparent project…</string>
 </resources>

@@ -22,6 +22,8 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
+import android.widget.Spinner
+import android.widget.ArrayAdapter
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Executors
 import java.text.NumberFormat
@@ -57,6 +59,10 @@ class MainActivity : Activity() {
     private lateinit var exportCanvasButton: Button
     private lateinit var cancelExportButton: Button
     private lateinit var compositeButton: Button
+    private lateinit var addImageButton: Button
+    private lateinit var eraserButton: Button
+    private lateinit var brushSettingsButton: Button
+    private var documentStructureChanged = false
     private var currentProject: CompProjectReader.Project? = null
     private var selectedProjectUri: Uri? = null
     private var selectedProjectIsArchive = false
@@ -75,6 +81,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         val retained = lastNonConfigurationInstance as? RetainedLayerSessions
         layerEditingSessions = retained?.sessions ?: linkedMapOf()
+        documentStructureChanged = retained?.structureChanged ?: false
         pendingLayerExport = retained?.pendingExport
         pendingProjectArchive = retained?.pendingProjectArchive
         pendingCanvasExport = retained?.pendingCanvasExport
@@ -82,6 +89,13 @@ class MainActivity : Activity() {
         exportFlowActive = pendingLayerExport != null || pendingProjectArchive != null || pendingCanvasExport != null || exportTask?.result == null && exportTask != null
         if (retained == null) cleanupOrphanedArchiveImports()
         buildHome()
+        savedInstanceState?.let {
+            canvasPreviewView.brushDiameter = it.getDouble("brushDiameter", 32.0)
+            canvasPreviewView.brushOpacity = it.getDouble("brushOpacity", 1.0)
+            canvasPreviewView.brushHardness = it.getDouble("brushHardness", 1.0)
+            canvasPreviewView.brushColor = it.getInt("brushColor", Color.BLACK)
+            canvasPreviewView.eraser = it.getBoolean("eraser", false)
+        }
         if (exportFlowActive) updateExportFlowControls()
         val restoredUri = savedInstanceState?.getString(STATE_PROJECT_URI)?.let(Uri::parse)
         selectedProjectUri = restoredUri
@@ -101,6 +115,11 @@ class MainActivity : Activity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putDouble("brushDiameter", canvasPreviewView.brushDiameter)
+        outState.putDouble("brushOpacity", canvasPreviewView.brushOpacity)
+        outState.putDouble("brushHardness", canvasPreviewView.brushHardness)
+        outState.putInt("brushColor", canvasPreviewView.brushColor)
+        outState.putBoolean("eraser", canvasPreviewView.eraser)
         outState.putString(STATE_PROJECT_URI, selectedProjectUri?.toString())
         outState.putBoolean(STATE_PROJECT_IS_ARCHIVE, selectedProjectIsArchive)
         outState.putBoolean(STATE_PROJECT_IS_IMAGE, selectedProjectIsImage)
@@ -117,8 +136,8 @@ class MainActivity : Activity() {
         if (::canvasPreviewView.isInitialized) canvasPreviewView.clear(getString(R.string.choose_project_status))
         if (!isChangingConfigurations) {
             val sessions = layerEditingSessions.values.toList()
-            val cache = currentProject?.archiveCacheDirectory
-            val release = { sessions.forEach { it.close() }; cache?.deleteRecursively(); Unit }
+            val project = currentProject
+            val release = { sessions.forEach { it.close() }; project?.releasePrivateAssets(); Unit }
             exportTask?.releaseWhenFinished(release) ?: release()
         }
         super.onDestroy()
@@ -126,7 +145,7 @@ class MainActivity : Activity() {
 
     override fun onRetainNonConfigurationInstance(): Any =
         RetainedLayerSessions(layerEditingSessions, pendingLayerExport, pendingProjectArchive, currentProject,
-            pendingCanvasExport, exportTask)
+            pendingCanvasExport, exportTask, documentStructureChanged)
 
     private fun buildHome() {
         val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -222,6 +241,8 @@ class MainActivity : Activity() {
             statusText.text = getString(R.string.brush_mode_disabled_status)
         }
         brushButton = toolButton(getString(R.string.canvas_tool_brush)) {
+            canvasPreviewView.setBrushMode(false)
+            canvasPreviewView.eraser = false
             if (canvasPreviewView.setBrushMode(true)) {
                 updateCanvasTools()
                 val name = currentProject?.layers?.firstOrNull { it.id == selectedLayerId }?.name.orEmpty()
@@ -235,6 +256,15 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { leftMargin = dp(8) })
+        eraserButton = toolButton(getString(R.string.canvas_tool_eraser)) {
+            canvasPreviewView.setBrushMode(false)
+            canvasPreviewView.eraser = true
+            canvasPreviewView.setBrushMode(true)
+            updateCanvasTools()
+        }
+        canvasToolRow.addView(eraserButton)
+        brushSettingsButton = toolButton(getString(R.string.brush_settings)) { showBrushSettings() }
+        canvasToolRow.addView(brushSettingsButton)
         undoButton = toolButton(getString(R.string.canvas_tool_undo)) {
             if (canvasPreviewView.undoBrushStroke()) updateCanvasTools()
         }
@@ -282,6 +312,8 @@ class MainActivity : Activity() {
             }
         }
         canvasToolRow.addView(compositeButton)
+        addImageButton = toolButton(getString(R.string.canvas_tool_add_image)) { chooseImage(append = true) }
+        canvasToolRow.addView(addImageButton)
         canvasToolScroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             isFillViewport = false
@@ -361,7 +393,7 @@ class MainActivity : Activity() {
 
     private fun chooseProjectSource() {
         if (exportTask?.result != null) exportTask = null
-        if (layerEditingSessions.values.any { it.hasCommittedChanges }) {
+        if (documentStructureChanged || layerEditingSessions.values.any { it.hasCommittedChanges }) {
             AlertDialog.Builder(this).setTitle(R.string.open_unsaved_title)
                 .setMessage(R.string.open_unsaved_message)
                 .setNegativeButton(android.R.string.cancel, null)
@@ -388,6 +420,42 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun showBrushSettings() {
+        canvasPreviewView.setBrushMode(false)
+        updateCanvasTools()
+        val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8)) }
+        fun field(label: String, value: String, numeric: Boolean = true): EditText {
+            fields.addView(text(label, 16, primaryText))
+            return EditText(this).apply {
+                inputType = if (numeric) InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL else InputType.TYPE_CLASS_TEXT
+                setText(value); contentDescription = label; minHeight = dp(48); fields.addView(this)
+            }
+        }
+        val diameter = field(getString(R.string.brush_size), canvasPreviewView.brushDiameter.toString())
+        val opacity = field(getString(R.string.brush_opacity), (canvasPreviewView.brushOpacity * 100).toString())
+        val hardness = field(getString(R.string.brush_hardness), (canvasPreviewView.brushHardness * 100).toString())
+        val color = field(getString(R.string.brush_color), String.format(java.util.Locale.ROOT, "#%08X", canvasPreviewView.brushColor), false)
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.brush_settings)
+            .setView(android.widget.ScrollView(this).apply { addView(fields) })
+            .setNegativeButton(android.R.string.cancel, null).setPositiveButton(R.string.apply_settings, null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val d = diameter.text.toString().toDoubleOrNull()
+                val o = opacity.text.toString().toDoubleOrNull()
+                val h = hardness.text.toString().toDoubleOrNull()
+                val c = runCatching { Color.parseColor(color.text.toString()) }.getOrNull()
+                if (d == null || d !in 1.0..1024.0 || o == null || o !in 0.0..100.0 || h == null || h !in 0.0..100.0 || c == null) {
+                    diameter.error = getString(R.string.brush_invalid_settings)
+                } else {
+                    canvasPreviewView.brushDiameter = d; canvasPreviewView.brushOpacity = o / 100
+                    canvasPreviewView.brushHardness = h / 100; canvasPreviewView.brushColor = c
+                    dialog.dismiss()
+                }
+            }
+        }
+        dialog.show()
+    }
+
     private fun showNewProjectDialog() {
         val fields = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -403,11 +471,35 @@ class MainActivity : Activity() {
                 fields.addView(this)
             }
         }
-        val width = numberField(R.string.new_project_width, "1024")
-        val height = numberField(R.string.new_project_height, "1024")
+        val width = numberField(R.string.new_project_width, "2048")
+        val height = numberField(R.string.new_project_height, "2048")
         val resolution = numberField(R.string.new_project_resolution, "72", decimal = true)
+        val presets = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                resources.getStringArray(R.array.canvas_presets))
+            contentDescription = getString(R.string.canvas_preset)
+        }
+        fields.addView(presets, 0)
+        presets.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val size = when (position) { 1 -> 2048 to 2048; 2 -> 1920 to 1080; 3 -> 1080 to 1920; else -> null }
+                size?.let {
+                    width.setText(String.format(java.util.Locale.ROOT, "%d", it.first))
+                    height.setText(String.format(java.util.Locale.ROOT, "%d", it.second))
+                }
+            }
+        }
+        fields.addView(text(getString(R.string.canvas_background), 16, primaryText))
+        val backgroundChoice = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                resources.getStringArray(R.array.canvas_backgrounds))
+            contentDescription = getString(R.string.canvas_background)
+        }
+        fields.addView(backgroundChoice)
         fields.addView(text(getString(R.string.new_project_transparent_note), 14, secondaryText))
-        val dialog = AlertDialog.Builder(this).setTitle(R.string.new_project_option).setView(fields)
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.new_project_option)
+            .setView(android.widget.ScrollView(this).apply { addView(fields) })
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(R.string.new_project_create, null).create()
         dialog.setOnShowListener {
@@ -420,14 +512,14 @@ class MainActivity : Activity() {
                     statusText.text = getString(R.string.new_project_invalid_status)
                 } else {
                     dialog.dismiss()
-                    createBlankProject(w, h, ppi)
+                    createBlankProject(w, h, ppi, BlankProjectCreator.Background.entries[backgroundChoice.selectedItemPosition])
                 }
             }
         }
         dialog.show()
     }
 
-    private fun createBlankProject(width: Int, height: Int, resolution: Double) {
+    private fun createBlankProject(width: Int, height: Int, resolution: Double, background: BlankProjectCreator.Background) {
         val request = projectOpenRequestId.incrementAndGet()
         setProjectOpenActive(true)
         statusText.text = getString(R.string.new_project_creating_status)
@@ -436,7 +528,7 @@ class MainActivity : Activity() {
             var failure: String? = null
             val cancelled = { request != projectOpenRequestId.get() || isFinishing || isDestroyed || Thread.currentThread().isInterrupted }
             try {
-                val project = BlankProjectCreator(applicationContext).create(width, height, resolution, cancelled)
+                val project = BlankProjectCreator(applicationContext).create(width, height, resolution, background, cancelled)
                 candidate = project
                 validateProjectAssets(project) { cancelled() }
             } catch (error: Exception) {
@@ -459,11 +551,12 @@ class MainActivity : Activity() {
                     statusText.text = getString(R.string.project_open_preserved_status, failure.orEmpty())
                     return@runOnUiThread
                 }
-                val previousCache = currentProject?.archiveCacheDirectory
+                val previousProject = currentProject
                 previewRequestId.incrementAndGet()
                 canvasPreviewView.clear(getString(R.string.choose_project_status))
                 clearLayerEditingSessions()
-                previousCache?.deleteRecursively()
+                previousProject?.releasePrivateAssets()
+                documentStructureChanged = true
                 selectedProjectUri = completed.sourceUri
                 selectedProjectIsArchive = false
                 selectedProjectIsImage = false
@@ -474,14 +567,14 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun chooseImage() {
+    private fun chooseImage(append: Boolean = false) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "image/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/png", "image/jpeg"))
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
-        startActivityForResult(intent, OPEN_IMAGE_REQUEST)
+        startActivityForResult(intent, if (append) APPEND_IMAGE_REQUEST else OPEN_IMAGE_REQUEST)
     }
 
     private fun chooseProjectFolder() {
@@ -504,6 +597,10 @@ class MainActivity : Activity() {
     @Deprecated("The platform picker returns a persistable document-tree permission through this callback.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == APPEND_IMAGE_REQUEST) {
+            if (resultCode == RESULT_OK) data?.data?.let(::appendImageLayer)
+            return
+        }
         if (requestCode == EXPORT_CANVAS_REQUEST) {
             val pending = pendingCanvasExport
             pendingCanvasExport = null
@@ -583,11 +680,12 @@ class MainActivity : Activity() {
                 }
 
                 if (!restoringState) {
-                    val previousCache = currentProject?.archiveCacheDirectory
+                    val previousProject = currentProject
                     previewRequestId.incrementAndGet()
                     canvasPreviewView.clear(getString(R.string.choose_project_status))
                     clearLayerEditingSessions()
-                    if (previousCache != null && previousCache != project.archiveCacheDirectory) previousCache.deleteRecursively()
+                    previousProject?.releasePrivateAssets()
+                    documentStructureChanged = false
                     try {
                         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     } catch (_: SecurityException) {
@@ -653,11 +751,12 @@ class MainActivity : Activity() {
                     return@runOnUiThread
                 }
 
-                val previousCache = currentProject?.archiveCacheDirectory
+                val previousProject = currentProject
                 previewRequestId.incrementAndGet()
                 canvasPreviewView.clear(getString(R.string.choose_project_status))
                 clearLayerEditingSessions()
-                if (previousCache != null && previousCache != project.archiveCacheDirectory) previousCache.deleteRecursively()
+                previousProject?.releasePrivateAssets()
+                documentStructureChanged = importImage
                 if (!restoringState) {
                     try {
                         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -672,6 +771,50 @@ class MainActivity : Activity() {
                 selectedProjectIsImage = importImage
                 showProject(project)
                 if (importImage) statusText.text = getString(R.string.image_import_complete_status)
+            }
+        }
+    }
+
+    private fun appendImageLayer(uri: Uri) {
+        val base = currentProject ?: return
+        if (exportFlowActive || projectOpenInProgress) return
+        val request = projectOpenRequestId.incrementAndGet()
+        setProjectOpenActive(true)
+        statusText.text = getString(R.string.image_import_loading_status)
+        worker.execute {
+            var imported: CompProjectReader.Project? = null
+            var candidate: CompProjectReader.Project? = null
+            var failure: String? = null
+            val cancelled = { request != projectOpenRequestId.get() || isFinishing || isDestroyed || Thread.currentThread().isInterrupted }
+            try {
+                require(base.layers.size < 10) { "The current editing limit is 10 layers." }
+                imported = ProjectImageImporter(applicationContext).read(uri, cancelled)
+                candidate = ProjectLayerAppender(applicationContext).append(base, requireNotNull(imported))
+                validateProjectAssets(requireNotNull(candidate), cancelled)
+            } catch (error: Exception) {
+                candidate = null
+                failure = error.message
+            } catch (_: OutOfMemoryError) {
+                candidate = null
+                failure = getString(R.string.project_open_memory_failure_status)
+            }
+            val completed = candidate
+            runOnUiThread {
+                if (cancelled() || currentProject !== base) {
+                    imported?.releasePrivateAssets()
+                    return@runOnUiThread
+                }
+                setProjectOpenActive(false)
+                if (completed == null) {
+                    imported?.releasePrivateAssets()
+                    statusText.text = getString(R.string.project_open_preserved_status, failure.orEmpty())
+                } else {
+                    previewRequestId.incrementAndGet()
+                    canvasPreviewView.clear(getString(R.string.choose_project_status))
+                    documentStructureChanged = true
+                    selectedLayerId = completed.activeLayerId
+                    showProject(completed)
+                }
             }
         }
     }
@@ -891,20 +1034,25 @@ class MainActivity : Activity() {
         val available = layer != null && canvasPreviewView.canEnableBrush()
         navigateButton.isEnabled = !busy
         brushButton.isEnabled = available && !busy
+        eraserButton.isEnabled = available && !busy
+        brushSettingsButton.isEnabled = !busy
+        eraserButton.isSelected = canvasPreviewView.isBrushMode && canvasPreviewView.eraser
+        eraserButton.text = getString(if (eraserButton.isSelected) R.string.canvas_tool_eraser_active else R.string.canvas_tool_eraser)
         brushButton.text = getString(when {
             !available -> R.string.canvas_tool_brush_unavailable
-            canvasPreviewView.isBrushMode -> R.string.canvas_tool_brush_active
+            canvasPreviewView.isBrushMode && !canvasPreviewView.eraser -> R.string.canvas_tool_brush_active
             else -> R.string.canvas_tool_brush
         })
         brushButton.contentDescription = getString(
             if (available) R.string.canvas_tool_brush_accessibility
             else R.string.canvas_tool_brush_unavailable_accessibility
         )
-        brushButton.isSelected = canvasPreviewView.isBrushMode
+        brushButton.isSelected = canvasPreviewView.isBrushMode && !canvasPreviewView.eraser
         exportLayerButton.isEnabled = available && !busy
         saveProjectCopyButton.isEnabled = currentProject != null && !busy
         exportCanvasButton.isEnabled = currentProject != null && !busy
         compositeButton.isEnabled = currentProject != null && !busy
+        addImageButton.isEnabled = currentProject != null && !busy && currentProject!!.layers.size < 10
         cancelExportButton.visibility = if (exportTask?.result == null && exportTask != null) View.VISIBLE else View.GONE
         cancelExportButton.isEnabled = exportTask?.cancellationRequested == false
         navigateButton.text = getString(
@@ -1220,7 +1368,8 @@ class MainActivity : Activity() {
         val pendingProjectArchive: PendingProjectArchive?,
         val project: CompProjectReader.Project?,
         val pendingCanvasExport: PendingCanvasExport?,
-        val exportTask: ExportTask?
+        val exportTask: ExportTask?,
+        val structureChanged: Boolean
     )
 
     private data class PendingCanvasExport(
@@ -1290,6 +1439,7 @@ class MainActivity : Activity() {
         private const val OPEN_PROJECT_ARCHIVE_REQUEST = 44
         private const val EXPORT_CANVAS_REQUEST = 45
         private const val OPEN_IMAGE_REQUEST = 46
+        private const val APPEND_IMAGE_REQUEST = 108
         private const val STATE_PROJECT_URI = "projectTreeUri"
         private const val STATE_PROJECT_IS_ARCHIVE = "projectIsArchive"
         private const val STATE_PROJECT_IS_IMAGE = "projectIsImage"
