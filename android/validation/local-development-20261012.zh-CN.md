@@ -52,4 +52,4 @@ C:/Android/Sdk/platform-tools/adb.exe devices -l
 - APK：3,525,075字节；SHA256 `9ff32936295f5665b5136d72618266eac352401af806617878b02eaa4ff7b946`。
 - 新证书SHA256 `7426b906481f4875d3459b343bc57aae793d6e737e3a85996eb97ff733800a0b`，与原证书不同。实际API31范围apksigner验证v3通过；另限定SDK23验证v1、SDK24–27验证v2通过，后两者只是签名方案静态检查，不宣称支持低于API31。旧校验器提示META-INF元数据未受JAR保护及不识别v3方案ID，实际API范围验证正常。
 - `aapt2 dump badging`：包名com.wonderassembly.compositor，0.1.0/versionCode1，minSdk31/targetSdk36，ARM64。`zipalign -c -P 16 4`退出0。`scripts/verify-apk.py`：全部ZIP CRC通过，唯一ARM64库ZIP DEFLATE method8，三个ELF LOAD alignment均0x4000且offset/vaddr模16KiB一致。不代表16KiB设备安装/运行通过。
-- 新APK稳定交付位置：`android/build/deliverables/Compositor-Android-LOCAL02-20261012.apk`（Git忽略）；源码提交在后续固定产物记录补记。样例comp未变化、不重发，三个旧ZIP没有加入提交或删除。
+- 新APK稳定交付位置：`android/build/deliverables/Compositor-Android-LOCAL02-20261012.apk`（Git忽略）；对应源码完整提交：`96c992d58de52b5220aaaa3f251833efedf445db`。APK在提交前从该同一份定稿源码构建，提交后仅补文档身份；业务源码没有改变。样例comp未变化、不重发，三个旧ZIP没有加入提交或删除。
