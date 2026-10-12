@@ -468,6 +468,8 @@ Codex自行完成：目录结构、依赖版本、普通界面细节、算法移
 
 ### 15.0 本轮最新快照（2026-10-12，本地继续开发）
 
+- TCPIP补测：[串行5555设备结果](../android/validation/tcpip-adb-20261012.zh-CN.md)。已验证软橡皮及Undo/Redo逐像素恢复、64px软笔点/参数保留/非法0拒绝、追加损坏图与取消后像素和历史保持、最终ZIP像素一致。业务源码/APK未变化；2048容量FAIL和全部未完成队列保持。后续只用192.168.100.107:5555，每条先connect且串行；旋转/分辨率等系统设置须先得到用户许可，不再pair。
+
 - 最新无线设备补验见[LOCAL02实测](../android/validation/wireless-adb-20261012.zh-CN.md)：新包安装启动、两项生产PNG/EXIF仪器测试、1024透明新建/追加/精确PNG、基本笔画撤销重做、带笔迹ZIP重开逐像素核验通过；默认2048在本机被动态预算拒绝，FAIL待修复。推送/导出统一Download/Compositor，父目录`.nomedia`已创建并必须保留。设备旋转仍NOT_RUN，Mac/持久恢复/整图分块未完成；下方“未连接”属于开始时快照。
 
 - 本地空目录克隆work，接续0216a30502b25000076b0375a5b3d2fe730b8eca；没有reset/clean或旧patch。最新源码/产物/实测见[本地阶段验证](../android/validation/local-development-20261012.zh-CN.md)。以下2026-10-11条目为上一阶段历史。
