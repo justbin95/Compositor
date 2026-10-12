@@ -1,5 +1,7 @@
 # Android 验证与接续记录
 
+最新实现/新包：[LOCAL03 2048准入修复](blank2048-local03-20261012.zh-CN.md)。43JVM、3真机仪器测试、默认2048创建/跨块绘画/保存重开像素闭环通过，关闭LOCAL02对应新建FAIL；其余容量、分块、恢复与Mac未完成，旋转仍NOT_RUN。
+
 最新补验：[传统TCPIP 5555串行测试](tcpip-adb-20261012.zh-CN.md)。用户授权USB切换成功、之后恢复测试；软橡皮/软笔点/失败取消保护及保存像素通过。仅更新验证范围，默认2048容量FAIL/旋转NOT_RUN/完整恢复与Mac未完成。
 
 最新设备实测：[2026-10-12 LOCAL02无线ADB](wireless-adb-20261012.zh-CN.md)。已用新APK安装/运行及验证小尺寸追加、绘画、保存副本重开和输出像素；默认2048容量FAIL。Download/Compositor/.nomedia已在图片推送前创建，后续必须保留。没有旋转验收，未继承旧INSTALL01 PASS。
