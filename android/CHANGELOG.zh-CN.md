@@ -1,12 +1,16 @@
 # Compositor Android 更新日志
 
-最新HANDLES11：[画布移动/缩放/旋转手柄与比例锁](validation/handles11-20261013.zh-CN.md)。89JVM、Lint0错误/6建议、ARM64/仪器构建通过；一次拖动一个历史步骤，取消/双指/重建和预算拒绝有本地证据。[6项待测](validation/handles11-device-checklist.zh-CN.md)全NOT_RUN，无模拟器安装/ADB/设备操作。数值比例联动、组多选、独立蒙版与全部Mac对齐继续保留。
+2026-10-13文档汇总：当前阶段为HANDLES11；完整状态和下一步见[开发计划15–16节](../docs/android-development-plan.zh-CN.md)。本轮仅整理文档，读回现有89项JVM报告（失败/错误/跳过0），没有重新构建或运行功能测试。此前Lint0错误/6建议及ARM64/仪器APK构建通过；新阶段真机、模拟器和Mac运行均未验证，设备旋转仍NOT_RUN。下一开发小步为数值宽高比例联动/百分比缩放，之后继续全部Mac对齐。
 
-最新TRANSFORM10：[单图层位置/尺寸/旋转/翻转/采样与蒙版联动](validation/transform10-20261013.zh-CN.md)。81JVM、Lint0错误/6建议、ARM64/仪器构建通过；[6项真机清单](validation/transform10-device-checklist.zh-CN.md)全NOT_RUN，无ADB/安装。仅数值变换，拖拽手柄/比例锁/组多选/独立蒙版及全部Mac对齐继续保留。
+以下按阶段保留当时检查数量、限制和下一步；旧包PASS不继承到当前包，旧“未实现”描述不覆盖当前总览。
 
-最新LAYER09：[图层名称/显示/透明度/同级排序及统一历史](validation/layer09-20261013.zh-CN.md)。78JVM、Lint0错误/6建议、ARM64与仪器构建通过；[7项真机清单](validation/layer09-device-checklist.zh-CN.md)全NOT_RUN，无ADB/安装。下一独立开发为图层变换，完整Mac对齐仍继续。
+阶段记录 HANDLES11：[画布移动/缩放/旋转手柄与比例锁](validation/handles11-20261013.zh-CN.md)。89JVM、Lint0错误/6建议、ARM64/仪器构建通过；一次拖动一个历史步骤，取消/双指/重建和预算拒绝有本地证据。[6项待测](validation/handles11-device-checklist.zh-CN.md)全NOT_RUN，无模拟器安装/ADB/设备操作。数值比例联动、组多选、独立蒙版与全部Mac对齐继续保留。
 
-最新TILE08：[分块PNG、全局采样与实际检查](validation/tile08-20261013.zh-CN.md)。71JVM、七种混合185万余像素差0，Lint/ARM64/仪器构建通过；本地裁剪适配器不替代生产Android区域解码/原生内存验收。用户继续暂缓真机，无ADB/安装；[8项待测](validation/tile08-device-checklist.zh-CN.md)。JPEG仍整图，继续图层操作和完整PARITY。
+阶段记录 TRANSFORM10：[单图层位置/尺寸/旋转/翻转/采样与蒙版联动](validation/transform10-20261013.zh-CN.md)。81JVM、Lint0错误/6建议、ARM64/仪器构建通过；[6项真机清单](validation/transform10-device-checklist.zh-CN.md)全NOT_RUN，无ADB/安装。仅数值变换，拖拽手柄/比例锁/组多选/独立蒙版及全部Mac对齐继续保留。
+
+阶段记录 LAYER09：[图层名称/显示/透明度/同级排序及统一历史](validation/layer09-20261013.zh-CN.md)。78JVM、Lint0错误/6建议、ARM64与仪器构建通过；[7项真机清单](validation/layer09-device-checklist.zh-CN.md)全NOT_RUN，无ADB/安装。下一独立开发为图层变换，完整Mac对齐仍继续。
+
+阶段记录 TILE08：[分块PNG、全局采样与实际检查](validation/tile08-20261013.zh-CN.md)。71JVM、七种混合185万余像素差0，Lint/ARM64/仪器构建通过；本地裁剪适配器不替代生产Android区域解码/原生内存验收。用户继续暂缓真机，无ADB/安装；[8项待测](validation/tile08-device-checklist.zh-CN.md)。JPEG仍整图，继续图层操作和完整PARITY。
 
 
 ## 2026-10-13：FOLDER07 文件夹版本副本与资源回收
