@@ -62,6 +62,17 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     private var previousPinchFocusY: Double? = null
     private var previousPinchSpan: Double? = null
     private var panResetAnimator: ValueAnimator? = null
+    private var transformMode = false
+    private var transformGesture: CanvasTransformGesture? = null
+    private var transformDraft: CompProjectReader.LayerTransform? = null
+    private var transformNavigating = false
+    internal var locksTransformRatio = true
+    internal var onTransformCommitted: ((String, CompProjectReader.LayerTransform) -> Unit)? = null
+    internal var onTransformActivityChanged: (() -> Unit)? = null
+    internal val isTransformMode get() = transformMode
+    internal val hasActiveEdit get() = hasActiveStroke || transformGesture != null
+    internal val displayedLayerTransform get() = transformDraft ?: layer?.transform
+    private val transformPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; strokeWidth = dp(2).toFloat() }
     private var brushMode = false
     internal var brushDiameter = 32.0
     internal var brushOpacity = 1.0
@@ -113,7 +124,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
             if (project == null || bitmap == null) {
                 false
             } else {
-                if (brushMode) handleBrushTouch(event) else handleNavigationTouch(event)
+                if (brushMode) handleBrushTouch(event) else if (transformMode) handleTransformTouch(event) else handleNavigationTouch(event)
                 if (clickDetected) {
                     clickDetected = false
                     view.performClick()
@@ -151,6 +162,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
 
     internal fun setBrushMode(enabled: Boolean): Boolean {
         if (enabled && !canEnableBrush()) return false
+        if (enabled) setTransformMode(false)
         if (brushMode == enabled) return true
         if (!enabled) finishBrushStroke(commit = true)
         brushMode = enabled
@@ -195,6 +207,127 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         flipX = flipX,
         flipY = flipY
     )
+
+    internal fun canEnableTransform(): Boolean {
+        val selected = layer ?: return false
+        return bitmap != null && !selected.group && !selected.adjustment && selected.imageFile != null
+    }
+
+    internal fun setTransformMode(enabled: Boolean): Boolean {
+        if (enabled && !canEnableTransform()) return false
+        cancelTransform()
+        if (enabled) setBrushMode(false)
+        transformMode = enabled
+        updateContentDescription()
+        invalidate()
+        return true
+    }
+
+    internal fun cancelTransform() {
+        val active = transformGesture != null
+        transformGesture = null
+        transformDraft = null
+        transformNavigating = false
+        invalidate()
+        if (active) onTransformActivityChanged?.invoke()
+    }
+
+    private fun transformViewport(): CanvasPreviewGeometry.Rect? = project?.let { fittedDocumentRect(it)?.let(::displayedRect) }
+    private fun transformDocumentPoint(x: Double, y: Double): PointD? {
+        val current = project ?: return null
+        val viewport = transformViewport() ?: return null
+        val scale = viewport.width / current.width
+        return PointD((x - viewport.left) / scale, (y - viewport.top) / scale)
+    }
+    internal fun transformViewPoint(unit: PointD): PointD? {
+        val t = displayedLayerTransform ?: return null
+        val viewport = transformViewport() ?: return null
+        val scale = viewport.width / requireNotNull(project).width
+        val point = CanvasTransformGesture.pointAt(t, unit)
+        return PointD(viewport.left + point.x * scale, viewport.top + point.y * scale)
+    }
+    private fun rotationViewPoint(): PointD? {
+        val top = transformViewPoint(PointD(0.5, 0.0)) ?: return null
+        val t = displayedLayerTransform ?: return null
+        val r = Math.toRadians(t.rotation % 360)
+        return PointD(top.x + kotlin.math.sin(r) * dp(32), top.y - kotlin.math.cos(r) * dp(32))
+    }
+    private fun handleTransformTouch(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                cancelPanResetAnimation()
+                multiTouchGesture = false
+                clearPinchBaseline()
+                val t = layer?.transform ?: return
+                val point = transformDocumentPoint(event.x.toDouble(), event.y.toDouble()) ?: return
+                fun near(p: PointD?) = p != null && kotlin.math.hypot(p.x - event.x, p.y - event.y) <= dp(24)
+                val handle = if (near(rotationViewPoint())) CanvasTransformGesture.ROTATE else {
+                    CanvasTransformGesture.handles.indices.minByOrNull { index ->
+                        val p = transformViewPoint(CanvasTransformGesture.handles[index])!!
+                        kotlin.math.hypot(p.x - event.x, p.y - event.y)
+                    }?.takeIf { near(transformViewPoint(CanvasTransformGesture.handles[it])) }
+                }
+                transformNavigating = handle == null && !CanvasTransformGesture.contains(t, point)
+                if (transformNavigating) handleNavigationTouch(event)
+                else {
+                    transformGesture = CanvasTransformGesture(t, point, handle ?: CanvasTransformGesture.MOVE)
+                    transformDraft = t
+                    onTransformActivityChanged?.invoke()
+                }
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                cancelTransform()
+                transformNavigating = true
+                handleNavigationTouch(event)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (transformNavigating) handleNavigationTouch(event)
+                else transformDocumentPoint(event.x.toDouble(), event.y.toDouble())?.let { point ->
+                    transformDraft = transformGesture?.updated(point, locksTransformRatio)
+                    invalidate()
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                if (transformNavigating) handleNavigationTouch(event)
+                else {
+                    val gesture = transformGesture
+                    val point = transformDocumentPoint(event.x.toDouble(), event.y.toDouble())
+                    val updated = if (gesture != null && point != null) gesture.updated(point, locksTransformRatio) else transformDraft
+                    val id = layer?.id
+                    cancelTransform()
+                    if (gesture != null && updated != null && updated != gesture.original && id != null) {
+                        val committed = CanvasTransformGesture.committed(updated)
+                        if (committed != gesture.original) onTransformCommitted?.invoke(id, committed)
+                    }
+                }
+                transformNavigating = false
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                cancelTransform()
+                multiTouchGesture = false
+                clearPinchBaseline()
+            }
+            MotionEvent.ACTION_POINTER_UP -> if (transformNavigating) handleNavigationTouch(event)
+        }
+    }
+
+    private fun drawTransformControls(canvas: Canvas) {
+        val points = CanvasTransformGesture.handles.map { transformViewPoint(it) ?: return }
+        transformPaint.style = Paint.Style.STROKE
+        for (index in points.indices) {
+            val p = points[index]; val next = points[(index + 1) % points.size]
+            canvas.drawLine(p.x.toFloat(), p.y.toFloat(), next.x.toFloat(), next.y.toFloat(), transformPaint)
+        }
+        val rotation = rotationViewPoint() ?: return
+        canvas.drawLine(points[1].x.toFloat(), points[1].y.toFloat(), rotation.x.toFloat(), rotation.y.toFloat(), transformPaint)
+        transformPaint.style = Paint.Style.FILL
+        for (point in points + rotation) {
+            transformPaint.color = dark
+            canvas.drawCircle(point.x.toFloat(), point.y.toFloat(), dp(7).toFloat(), transformPaint)
+            transformPaint.color = Color.WHITE
+            canvas.drawCircle(point.x.toFloat(), point.y.toFloat(), dp(4).toFloat(), transformPaint)
+        }
+    }
 
     private fun handleNavigationTouch(event: MotionEvent) {
         when (event.actionMasked) {
@@ -409,6 +542,8 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         val currentLayer = layer
         contentDescription = if (currentLayer == null) {
             context.getString(R.string.canvas_project_description)
+        } else if (transformMode) {
+            context.getString(R.string.canvas_transform_description, currentLayer.name)
         } else if (brushMode) {
             context.getString(R.string.canvas_layer_description, currentLayer.name) + " Brush mode is on."
         } else {
@@ -549,6 +684,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         bitmap: Bitmap,
         editingSession: LayerEditingSession?
     ) {
+        cancelTransform()
         finishBrushStroke(commit = false)
         resetViewportForProject(project)
         clearEditedTileBitmaps()
@@ -566,6 +702,8 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     }
 
     fun showComposite(project: CompProjectReader.Project, bitmap: Bitmap, note: String) {
+        setTransformMode(false)
+        cancelTransform()
         finishBrushStroke(commit = false)
         resetViewportForProject(project)
         clearEditedTileBitmaps()
@@ -581,6 +719,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     }
 
     fun showMessage(project: CompProjectReader.Project, message: String) {
+        setTransformMode(false)
         finishBrushStroke(commit = false)
         clearEditedTileBitmaps()
         replaceBitmap(null)
@@ -595,6 +734,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     }
 
     fun clear(message: String) {
+        setTransformMode(false)
         finishBrushStroke(commit = false)
         clearEditedTileBitmaps()
         replaceBitmap(null)
@@ -611,6 +751,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
+        cancelTransform()
         cancelPanResetAnimation()
         constrainPan()
     }
@@ -618,6 +759,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
         if (!hasWindowFocus) {
+            cancelTransform()
             finishBrushStroke(commit = false)
             multiTouchGesture = false
             clearPinchBaseline()
@@ -625,6 +767,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        cancelTransform()
         finishBrushStroke(commit = false)
         cancelPanResetAnimation()
         clearEditedTileBitmaps()
@@ -635,7 +778,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         super.onDraw(canvas)
         canvas.drawColor(dark)
         val currentProject = project
-        val currentLayer = layer
+        val currentLayer = layer?.let { selected -> transformDraft?.let { selected.copy(transform = it) } ?: selected }
         if (currentProject == null) {
             drawCenteredMessage(canvas, message ?: context.getString(R.string.canvas_waiting_message))
             return
@@ -662,6 +805,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         }
         canvas.restoreToCount(save)
         canvas.drawRect(documentRect, borderPaint)
+        if (transformMode && currentBitmap != null && currentLayer != null) drawTransformControls(canvas)
         if (currentBitmap == null) drawCenteredMessage(canvas, message ?: context.getString(R.string.canvas_layer_empty_message))
     }
 

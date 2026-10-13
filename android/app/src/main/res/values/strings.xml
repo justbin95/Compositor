@@ -182,4 +182,10 @@
     <string name="layer_flip_vertical">Flip Vertical</string>
     <string name="layer_sampling">Sampling</string>
     <string name="layer_transform_invalid">Use finite numbers: position ±1,000,000; size 1–300,000; rotation ±360°.</string>
+    <string name="canvas_transform">Transform</string>
+    <string name="canvas_transform_active">Transform On</string>
+    <string name="transform_ratio_locked">Ratio Locked</string>
+    <string name="transform_ratio_unlocked">Ratio Free</string>
+    <string name="transform_cancel_drag">Cancel Transform</string>
+    <string name="canvas_transform_description">Transform %1$s. Drag inside to move, handles to resize, or the outer circle to rotate. Two fingers navigate. Numeric transforms are also available.</string>
 </resources>

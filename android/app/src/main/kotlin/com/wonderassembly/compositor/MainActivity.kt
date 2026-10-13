@@ -62,6 +62,10 @@ class MainActivity : Activity() {
     private lateinit var compositeButton: Button
     private lateinit var moveLayerUpButton: Button
     private lateinit var moveLayerDownButton: Button
+    private var canvasTransformLayerId: String? = null
+    private lateinit var canvasTransformButton: Button
+    private lateinit var transformRatioButton: Button
+    private lateinit var cancelTransformButton: Button
     private lateinit var transformLayerButton: Button
     private lateinit var layerPropertiesButton: Button
     private lateinit var addImageButton: Button
@@ -121,6 +125,8 @@ class MainActivity : Activity() {
             canvasPreviewView.brushHardness = it.getDouble("brushHardness", 1.0)
             canvasPreviewView.brushColor = it.getInt("brushColor", Color.BLACK)
             canvasPreviewView.eraser = it.getBoolean("eraser", false)
+            canvasPreviewView.locksTransformRatio = it.getBoolean("locksTransformRatio", true)
+            canvasTransformLayerId = it.getString("canvasTransformLayerId")
         }
         if (exportFlowActive) updateExportFlowControls()
         val restoredUri = savedInstanceState?.getString(STATE_PROJECT_URI)?.let(Uri::parse)
@@ -159,6 +165,8 @@ class MainActivity : Activity() {
         outState.putDouble("brushHardness", canvasPreviewView.brushHardness)
         outState.putInt("brushColor", canvasPreviewView.brushColor)
         outState.putBoolean("eraser", canvasPreviewView.eraser)
+        outState.putBoolean("locksTransformRatio", canvasPreviewView.locksTransformRatio)
+        outState.putString("canvasTransformLayerId", canvasTransformLayerId)
         outState.putString(STATE_PROJECT_URI, selectedProjectUri?.toString())
         outState.putBoolean(STATE_PROJECT_IS_ARCHIVE, selectedProjectIsArchive)
         outState.putBoolean(STATE_PROJECT_IS_IMAGE, selectedProjectIsImage)
@@ -267,6 +275,14 @@ class MainActivity : Activity() {
             canvasPreviewView.setBrushMode(false)
             updateCanvasTools()
         }
+        canvasPreviewView.onTransformCommitted = { layerId, transform ->
+            val base = currentProject
+            val layer = base?.layers?.find { it.id == layerId }
+            if (base != null && layer != null && selectedLayerId == layerId) {
+                changeLayerMetadata(base, layerId, layer.name, layer.visible, layer.opacity, transform = transform)
+            }
+        }
+        canvasPreviewView.onTransformActivityChanged = { updateCanvasTools() }
         canvasPreviewView.onBrushHistoryChanged = { updateBrushHistoryButtons() }
         canvasPreviewView.onBrushHistoryLimitReached = {
             statusText.text = getString(R.string.brush_history_budget_exceeded_status)
@@ -278,11 +294,14 @@ class MainActivity : Activity() {
             contentDescription = getString(R.string.canvas_tools_description)
         }
         navigateButton = toolButton(getString(R.string.canvas_tool_navigate)) {
+            canvasTransformLayerId = null
+            canvasPreviewView.setTransformMode(false)
             canvasPreviewView.setBrushMode(false)
             updateCanvasTools()
             statusText.text = getString(R.string.brush_mode_disabled_status)
         }
         brushButton = toolButton(getString(R.string.canvas_tool_brush)) {
+            canvasTransformLayerId = null
             canvasPreviewView.setBrushMode(false)
             canvasPreviewView.eraser = false
             if (canvasPreviewView.setBrushMode(true)) {
@@ -299,6 +318,7 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { leftMargin = dp(8) })
         eraserButton = toolButton(getString(R.string.canvas_tool_eraser)) {
+            canvasTransformLayerId = null
             canvasPreviewView.setBrushMode(false)
             canvasPreviewView.eraser = true
             canvasPreviewView.setBrushMode(true)
@@ -368,6 +388,19 @@ class MainActivity : Activity() {
         canvasToolRow.addView(layerPropertiesButton)
         transformLayerButton = toolButton(getString(R.string.layer_transform)) { showLayerTransform() }
         canvasToolRow.addView(transformLayerButton)
+        canvasTransformButton = toolButton(getString(R.string.canvas_transform)) {
+            val enabled = !canvasPreviewView.isTransformMode
+            if (canvasPreviewView.setTransformMode(enabled)) canvasTransformLayerId = if (enabled) selectedLayerId else null
+            updateCanvasTools()
+        }
+        transformRatioButton = toolButton(getString(R.string.transform_ratio_locked)) {
+            canvasPreviewView.locksTransformRatio = !canvasPreviewView.locksTransformRatio
+            updateCanvasTools()
+        }
+        cancelTransformButton = toolButton(getString(R.string.transform_cancel_drag)) { canvasPreviewView.cancelTransform() }
+        canvasToolRow.addView(canvasTransformButton)
+        canvasToolRow.addView(transformRatioButton)
+        canvasToolRow.addView(cancelTransformButton)
         moveLayerUpButton = toolButton(getString(R.string.layer_move_up)) { moveSelectedLayer(1) }
         moveLayerDownButton = toolButton(getString(R.string.layer_move_down)) { moveSelectedLayer(-1) }
         canvasToolRow.addView(moveLayerUpButton)
@@ -843,7 +876,7 @@ class MainActivity : Activity() {
     private fun showLayerTransform() {
         val base = currentProject ?: return
         val layer = base.layers.find { it.id == selectedLayerId } ?: return
-        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke || layer.group || layer.adjustment || layer.imageFile == null) return
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveEdit || layer.group || layer.adjustment || layer.imageFile == null) return
         val transform = layer.transform
         val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), 0) }
         val labels = listOf("X", "Y", "Width", "Height", "Rotation (°)")
@@ -904,7 +937,7 @@ class MainActivity : Activity() {
     private fun showLayerProperties() {
         val base = currentProject ?: return
         val layer = base.layers.find { it.id == selectedLayerId } ?: return
-        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke) return
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveEdit) return
         val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), 0) }
         val name = EditText(this).apply { setText(layer.name); hint = getString(R.string.layer_name) }
         val opacity = EditText(this).apply {
@@ -942,7 +975,7 @@ class MainActivity : Activity() {
 
     private fun changeLayerMetadata(base: CompProjectReader.Project, layerId: String,
         name: String, visible: Boolean, opacity: Double, move: Int = 0, transform: CompProjectReader.LayerTransform? = null) {
-        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke) return
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveEdit) return
         val request = projectOpenRequestId.incrementAndGet()
         setProjectOpenActive(true)
         worker.execute {
@@ -1229,6 +1262,7 @@ class MainActivity : Activity() {
                 if (decoded != null) {
                     if (createdSession != null) layerEditingSessions[editingKey] = createdSession!!
                     canvasPreviewView.showLayer(project, layer, decoded!!, createdSession)
+                    canvasPreviewView.setTransformMode(canvasTransformLayerId == layer.id)
                     updateCanvasTools(layer)
                     statusText.text = getString(
                         if (createdSession != null && canvasPreviewView.canEnableBrush()) {
@@ -1255,7 +1289,7 @@ class MainActivity : Activity() {
 
     private fun updateCanvasTools(selectedLayer: CompProjectReader.Layer? = null) {
         if (!::canvasToolRow.isInitialized) return
-        val busy = exportFlowActive || projectOpenInProgress
+        val busy = exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveEdit
         val layer = selectedLayer ?: currentProject?.layers?.firstOrNull { it.id == selectedLayerId }
         canvasToolScroller.visibility = if (currentProject == null) View.GONE else View.VISIBLE
         val available = layer != null && canvasPreviewView.canEnableBrush()
@@ -1281,27 +1315,35 @@ class MainActivity : Activity() {
         saveProjectFolderButton.isEnabled = currentProject != null && !busy
         compositeButton.isEnabled = currentProject != null && !busy
         val selected = currentProject?.layers?.find { it.id == selectedLayerId }
-        transformLayerButton.isEnabled = !busy && !canvasPreviewView.hasActiveStroke && selected?.imageFile != null && !selected.group && !selected.adjustment
+        canvasTransformButton.isEnabled = !busy && canvasPreviewView.canEnableTransform()
+        canvasTransformButton.isSelected = canvasPreviewView.isTransformMode
+        canvasTransformButton.text = getString(if (canvasPreviewView.isTransformMode) R.string.canvas_transform_active else R.string.canvas_transform)
+        transformRatioButton.isEnabled = !busy && canvasPreviewView.canEnableTransform()
+        transformRatioButton.text = getString(if (canvasPreviewView.locksTransformRatio) R.string.transform_ratio_locked else R.string.transform_ratio_unlocked)
+        transformRatioButton.isSelected = canvasPreviewView.locksTransformRatio
+        cancelTransformButton.visibility = if (canvasPreviewView.isTransformMode && canvasPreviewView.hasActiveEdit) View.VISIBLE else View.GONE
+        cancelTransformButton.isEnabled = !exportFlowActive && !projectOpenInProgress
+        transformLayerButton.isEnabled = !busy && !canvasPreviewView.hasActiveEdit && selected?.imageFile != null && !selected.group && !selected.adjustment
         val siblings = currentProject?.layers.orEmpty().filter { selected != null && it.parentId == selected.parentId }
         val position = siblings.indexOf(selected)
-        moveLayerUpButton.isEnabled = !busy && !canvasPreviewView.hasActiveStroke && position >= 0 && position < siblings.lastIndex
-        moveLayerDownButton.isEnabled = !busy && !canvasPreviewView.hasActiveStroke && position > 0
-        layerPropertiesButton.isEnabled = selectedLayerId != null && !busy && !canvasPreviewView.hasActiveStroke
+        moveLayerUpButton.isEnabled = !busy && !canvasPreviewView.hasActiveEdit && position >= 0 && position < siblings.lastIndex
+        moveLayerDownButton.isEnabled = !busy && !canvasPreviewView.hasActiveEdit && position > 0
+        layerPropertiesButton.isEnabled = selectedLayerId != null && !busy && !canvasPreviewView.hasActiveEdit
         addImageButton.isEnabled = currentProject != null && !busy && currentProject!!.layers.size < 10
         cancelExportButton.visibility = if (exportTask?.result == null && exportTask != null) View.VISIBLE else View.GONE
         cancelExportButton.isEnabled = exportTask?.cancellationRequested == false
         navigateButton.text = getString(
-            if (canvasPreviewView.isBrushMode) R.string.canvas_tool_navigate
+            if (canvasPreviewView.isBrushMode || canvasPreviewView.isTransformMode) R.string.canvas_tool_navigate
             else R.string.canvas_tool_navigate_active
         )
-        navigateButton.isSelected = !canvasPreviewView.isBrushMode
+        navigateButton.isSelected = !canvasPreviewView.isBrushMode && !canvasPreviewView.isTransformMode
         updateBrushHistoryButtons()
     }
 
     private fun updateBrushHistoryButtons() {
         if (!::undoButton.isInitialized || !::redoButton.isInitialized) return
-        undoButton.isEnabled = !exportFlowActive && !projectOpenInProgress && (!canvasPreviewView.hasActiveStroke && documentHistory.canUndo)
-        redoButton.isEnabled = !exportFlowActive && !projectOpenInProgress && (!canvasPreviewView.hasActiveStroke && documentHistory.canRedo)
+        undoButton.isEnabled = !exportFlowActive && !projectOpenInProgress && (!canvasPreviewView.hasActiveEdit && documentHistory.canUndo)
+        redoButton.isEnabled = !exportFlowActive && !projectOpenInProgress && (!canvasPreviewView.hasActiveEdit && documentHistory.canRedo)
     }
 
     private fun requestLayerPngExport() {
@@ -1589,7 +1631,7 @@ class MainActivity : Activity() {
     }
 
     private fun applyDocumentHistory(redo: Boolean) {
-        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke) return
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveEdit) return
         val project = currentProject ?: return
         try {
             val apply: (DocumentEdit) -> Unit = { edit ->
@@ -1675,7 +1717,7 @@ class MainActivity : Activity() {
     private fun requestInternalRecovery(force: Boolean = false) {
         val project = currentProject ?: return
         if (project.documentId != recoveryDocumentId || projectOpenInProgress || exportFlowActive ||
-            canvasPreviewView.hasActiveStroke || recoveryTask?.result == null && recoveryTask != null) return
+            canvasPreviewView.hasActiveEdit || recoveryTask?.result == null && recoveryTask != null) return
         recoveryTask?.let(::consumeRecoveryResult)
         if (!force && recoveredRevision == recoveryRevision) return
         val frozen = linkedMapOf<String, FrozenLayerExport>()
