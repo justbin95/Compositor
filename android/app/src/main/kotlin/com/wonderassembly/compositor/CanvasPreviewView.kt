@@ -65,13 +65,17 @@ internal class CanvasPreviewView(context: Context) : View(context) {
     private var transformMode = false
     private var transformGesture: CanvasTransformGesture? = null
     private var transformDraft: CompProjectReader.LayerTransform? = null
+    private var groupPlan: GroupTransformPlan? = null
+    private var groupDraftBitmap: Bitmap? = null
+    private val groupPreviewRevision = java.util.concurrent.atomic.AtomicInteger()
+    internal var onGroupPreviewRequested: ((CompProjectReader.Project, () -> Boolean, (Bitmap?) -> Unit) -> Unit)? = null
     private var transformNavigating = false
     internal var locksTransformRatio = true
     internal var onTransformCommitted: ((String, CompProjectReader.LayerTransform) -> Unit)? = null
     internal var onTransformActivityChanged: (() -> Unit)? = null
     internal val isTransformMode get() = transformMode
     internal val hasActiveEdit get() = hasActiveStroke || transformGesture != null
-    internal val displayedLayerTransform get() = transformDraft ?: layer?.transform
+    internal val displayedLayerTransform get() = transformDraft ?: groupPlan?.box ?: layer?.transform
     private val transformPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; strokeWidth = dp(2).toFloat() }
     private var brushMode = false
     internal var brushDiameter = 32.0
@@ -210,7 +214,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
 
     internal fun canEnableTransform(): Boolean {
         val selected = layer ?: return false
-        return bitmap != null && !selected.group && !selected.adjustment && selected.imageFile != null
+        return bitmap != null && (groupPlan != null || (!selected.group && !selected.adjustment && selected.imageFile != null))
     }
 
     internal fun setTransformMode(enabled: Boolean): Boolean {
@@ -227,6 +231,9 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         val active = transformGesture != null
         transformGesture = null
         transformDraft = null
+        groupPreviewRevision.incrementAndGet()
+        groupDraftBitmap?.recycle()
+        groupDraftBitmap = null
         transformNavigating = false
         invalidate()
         if (active) onTransformActivityChanged?.invoke()
@@ -258,7 +265,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
                 cancelPanResetAnimation()
                 multiTouchGesture = false
                 clearPinchBaseline()
-                val t = layer?.transform ?: return
+                val t = groupPlan?.box ?: layer?.transform ?: return
                 val point = transformDocumentPoint(event.x.toDouble(), event.y.toDouble()) ?: return
                 fun near(p: PointD?) = p != null && kotlin.math.hypot(p.x - event.x, p.y - event.y) <= dp(24)
                 val handle = if (near(rotationViewPoint())) CanvasTransformGesture.ROTATE else {
@@ -284,6 +291,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
                 if (transformNavigating) handleNavigationTouch(event)
                 else transformDocumentPoint(event.x.toDouble(), event.y.toDouble())?.let { point ->
                     transformDraft = transformGesture?.updated(point, locksTransformRatio)
+                    requestGroupDraft()
                     invalidate()
                 }
             }
@@ -308,6 +316,28 @@ internal class CanvasPreviewView(context: Context) : View(context) {
                 clearPinchBaseline()
             }
             MotionEvent.ACTION_POINTER_UP -> if (transformNavigating) handleNavigationTouch(event)
+        }
+    }
+
+    private fun requestGroupDraft() {
+        val plan = groupPlan ?: return
+        val base = project ?: return
+        val target = transformDraft ?: return
+        val revision = groupPreviewRevision.incrementAndGet()
+        val cancelled = { groupPreviewRevision.get() != revision }
+        val preview = try { plan.preview(base, target) } catch (error: IllegalArgumentException) {
+            cancelTransform()
+            onBrushError?.invoke(error.message ?: "The group transform exceeds the supported range.")
+            return
+        }
+        onGroupPreviewRequested?.invoke(preview, cancelled) { rendered ->
+            if (cancelled()) rendered?.recycle()
+            else if (rendered == null) cancelTransform()
+            else {
+                groupDraftBitmap?.recycle()
+                groupDraftBitmap = rendered
+                invalidate()
+            }
         }
     }
 
@@ -691,6 +721,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         replaceBitmap(bitmap)
         this.project = project
         this.layer = layer
+        groupPlan = null
         this.editingSession = editingSession
         brushMode = false
         showingComposite = false
@@ -710,12 +741,20 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         replaceBitmap(bitmap)
         this.project = project
         layer = null
+        groupPlan = null
         editingSession = null
         brushMode = false
         showingComposite = true
         message = note
         contentDescription = context.getString(R.string.canvas_composite_description, note)
         invalidate()
+    }
+
+    fun showGroup(project: CompProjectReader.Project, selected: CompProjectReader.Layer, bitmap: Bitmap, note: String) {
+        val plan = GroupTransformPlan.forGroup(project, selected.id)
+        showComposite(project, bitmap, note)
+        layer = selected
+        groupPlan = plan
     }
 
     fun showMessage(project: CompProjectReader.Project, message: String) {
@@ -725,6 +764,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         replaceBitmap(null)
         this.project = project
         layer = null
+        groupPlan = null
         editingSession = null
         brushMode = false
         showingComposite = false
@@ -740,6 +780,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         replaceBitmap(null)
         project = null
         layer = null
+        groupPlan = null
         editingSession = null
         brushMode = false
         showingComposite = false
@@ -794,7 +835,7 @@ internal class CanvasPreviewView(context: Context) : View(context) {
         val save = canvas.save()
         canvas.clipRect(documentRect)
         drawCheckerboard(canvas, documentRect)
-        val currentBitmap = bitmap
+        val currentBitmap = groupDraftBitmap ?: bitmap
         if (currentBitmap != null && showingComposite) {
             imagePaint.alpha = 255
             imagePaint.isFilterBitmap = true

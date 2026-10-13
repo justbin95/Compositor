@@ -8,6 +8,24 @@ internal data class GroupTransformPlan(
     val box: CompProjectReader.LayerTransform,
     val originals: Map<String, CompProjectReader.LayerTransform>
 ) {
+    /** Display-only snapshot: never pass this unchanged manifest to a writer or recovery store. */
+    fun preview(project: CompProjectReader.Project, target: CompProjectReader.LayerTransform): CompProjectReader.Project {
+        val transforms = moved(target)
+        val records = org.json.JSONObject(String(project.originalManifestBytes, Charsets.UTF_8)).getJSONArray("layers")
+        val linked = (0 until records.length()).associate { index ->
+            val record = records.getJSONObject(index)
+            record.getString("id").lowercase(java.util.Locale.ROOT) to record.optBoolean("maskLinked", true)
+        }
+        return project.copy(layers = project.layers.map { layer ->
+            val transform = transforms[layer.id] ?: return@map layer
+            ProjectLayerTransformEditor.validateMember(layer, transform)
+            val size = layer.maskFile?.let { project.maskSizes[it] }
+            val mask = size?.let { ProjectLayerTransformEditor.maskPlacement(layer, it,
+                linked.getValue(layer.id.lowercase(java.util.Locale.ROOT)), transform) }
+            layer.copy(transform = transform, maskTransform = mask)
+        })
+    }
+
     fun moved(target: CompProjectReader.LayerTransform): Map<String, CompProjectReader.LayerTransform> {
         NumericLayerTransform.validated(target)
         return originals.mapValues { (_, original) -> TransformPlacement.following(original, box, target) }

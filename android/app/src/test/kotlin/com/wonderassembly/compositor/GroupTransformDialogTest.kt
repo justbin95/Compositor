@@ -17,6 +17,78 @@ import org.robolectric.shadows.ShadowAlertDialog
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class GroupTransformDialogTest {
+    @Test fun canvasGroupReleaseUsesOneHistoryAndRestoresGroupTool() = canvasDrag(false)
+    @Test fun canvasGroupBudgetRejectionKeepsAllMembersAndRedo() = canvasDrag(true)
+    @Test fun activeCanvasDraftIsExcludedFromSnapshotAndConfigurationRecovery() = fixture { controller, f, history ->
+        var activity = controller.get()
+        field("canvasTransformLayerId").set(activity, f.root)
+        MainActivity::class.java.getDeclaredMethod("showLayerPreview", CompProjectReader.Layer::class.java)
+            .apply { isAccessible = true }.invoke(activity, f.project.layers.single { it.id == f.root })
+        drain(activity)
+        val view = field("canvasPreviewView").get(activity) as CanvasPreviewView
+        view.layout(0, 0, 800, 600)
+        val start = view.transformViewPoint(com.wonderassembly.compositor.core.PointD(0.5, 0.5))!!
+        for ((action, x) in listOf(android.view.MotionEvent.ACTION_DOWN to start.x, android.view.MotionEvent.ACTION_MOVE to start.x + 40)) {
+            val event = android.view.MotionEvent.obtain(0, 10, action, x.toFloat(), start.y.toFloat(), 0)
+            try { view.dispatchTouchEvent(event) } finally { event.recycle() }
+        }
+        drain(activity)
+        assertTrue(view.hasActiveEdit)
+        val file = java.io.File.createTempFile("group-draft-snapshot-", ".zip", activity.cacheDir)
+        try {
+            val snapshot = field("currentProject").get(activity) as CompProjectReader.Project
+            file.outputStream().use { CompProjectArchiveWriter(activity.contentResolver).write(it, snapshot, emptyMap()) }
+            val reopened = CompProjectArchiveImporter(activity, CompProjectReader(activity)).read(android.net.Uri.fromFile(file)) { false }
+            try { assertEquals(f.project.layers, reopened.layers) } finally { reopened.releasePrivateAssets() }
+        } finally { file.delete() }
+        controller.recreate(); activity = controller.get(); drain(activity)
+        val restored = field("canvasPreviewView").get(activity) as CanvasPreviewView
+        assertTrue(restored.isTransformMode); assertFalse(restored.hasActiveEdit)
+        assertEquals(GroupTransformPlan.forGroup(f.project, f.root).box, restored.displayedLayerTransform)
+        assertEquals(f.project.layers, (field("currentProject").get(activity) as CompProjectReader.Project).layers)
+        assertFalse(history.canUndo)
+    }
+
+    private fun canvasDrag(reject: Boolean) = fixture(reject) { controller, f, history ->
+        var activity = controller.get()
+        field("canvasTransformLayerId").set(activity, f.root)
+        MainActivity::class.java.getDeclaredMethod("showLayerPreview", CompProjectReader.Layer::class.java)
+            .apply { isAccessible = true }.invoke(activity, f.project.layers.single { it.id == f.root })
+        drain(activity)
+        val view = field("canvasPreviewView").get(activity) as CanvasPreviewView
+        view.layout(0, 0, 800, 600)
+        assertTrue(view.isTransformMode)
+        val start = view.transformViewPoint(com.wonderassembly.compositor.core.PointD(0.5, 0.5))!!
+        fun touch(action: Int, x: Double) {
+            val event = android.view.MotionEvent.obtain(0, 10, action, x.toFloat(), start.y.toFloat(), 0)
+            try { view.dispatchTouchEvent(event) } finally { event.recycle() }
+        }
+        touch(android.view.MotionEvent.ACTION_DOWN, start.x)
+        touch(android.view.MotionEvent.ACTION_MOVE, start.x + 40)
+        drain(activity)
+        assertSame(f.project, field("currentProject").get(activity))
+        assertFalse(history.canUndo)
+        touch(android.view.MotionEvent.ACTION_UP, start.x + 40)
+        drain(activity)
+        if (reject) {
+            assertSame(f.project, field("currentProject").get(activity))
+            assertTrue(history.canRedo); assertFalse(history.canUndo)
+        } else {
+            val changed = field("currentProject").get(activity) as CompProjectReader.Project
+            assertEquals(1, history.retainedEdits().size)
+            assertNotEquals(f.project.layers.single { it.id == f.first }.transform, changed.layers.single { it.id == f.first }.transform)
+            assertNotEquals(f.project.layers.single { it.id == f.second }.transform, changed.layers.single { it.id == f.second }.transform)
+            controller.recreate(); activity = controller.get(); drain(activity)
+            val restored = field("canvasPreviewView").get(activity) as CanvasPreviewView
+            assertTrue(restored.isTransformMode); assertFalse(restored.hasActiveEdit)
+            val undo = MainActivity::class.java.getDeclaredMethod("applyDocumentHistory", Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+            undo.invoke(activity, false); drain(activity)
+            assertEquals(f.project.layers, (field("currentProject").get(activity) as CompProjectReader.Project).layers)
+            undo.invoke(activity, true); drain(activity)
+            assertEquals(changed.layers, (field("currentProject").get(activity) as CompProjectReader.Project).layers)
+        }
+    }
+
     private fun field(name: String) = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }
     private fun descendants(view: View): List<View> = listOf(view) +
         if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()

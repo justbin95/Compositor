@@ -21,11 +21,7 @@ internal class ProjectLayerTransformEditor(private val context: Context) {
         // Validate every member before touching a candidate. A rejected group never partly moves.
         for ((id, transform) in transforms) {
             val layer = requireNotNull(layers[id])
-            require(!layer.group && !layer.adjustment && layer.imageFile != null) { "Select a pixel layer to transform." }
-            require(listOf(transform.x, transform.y, transform.width, transform.height, transform.rotation).all { it.isFinite() } &&
-                abs(transform.x) <= 1_000_000 && abs(transform.y) <= 1_000_000 &&
-                transform.width in 1.0..300_000.0 && transform.height in 1.0..300_000.0 &&
-                transform.sampling in listOf("Nearest", "Smooth", "High quality")) { "The transform exceeds the supported range." }
+            validateMember(layer, transform)
         }
         if (transforms.all { (id, transform) -> transform == layers.getValue(id).transform }) return base
         val manifest = JSONObject(String(base.originalManifestBytes, Charsets.UTF_8))
@@ -42,17 +38,32 @@ internal class ProjectLayerTransformEditor(private val context: Context) {
             .copy(additionalCacheDirectories = base.additionalCacheDirectories)
     }
 
+    companion object {
+        internal fun maskPlacement(layer: CompProjectReader.Layer, size: CompProjectReader.PixelSize,
+            linked: Boolean, transform: CompProjectReader.LayerTransform): CompProjectReader.LayerTransform? {
+            val placement = if (size.width == 1 && size.height == 1) null
+                else if (linked) layer.maskTransform?.let { TransformPlacement.following(it, layer.transform, transform) }
+                else layer.maskTransform ?: layer.transform
+            return placement?.takeUnless { it.copy(sampling = transform.sampling) == transform }
+        }
+
+        internal fun validateMember(layer: CompProjectReader.Layer, transform: CompProjectReader.LayerTransform) {
+            require(!layer.group && !layer.adjustment && layer.imageFile != null) { "Select a pixel layer to transform." }
+            require(listOf(transform.x, transform.y, transform.width, transform.height, transform.rotation).all { it.isFinite() } &&
+                abs(transform.x) <= 1_000_000 && abs(transform.y) <= 1_000_000 &&
+                transform.width in 1.0..300_000.0 && transform.height in 1.0..300_000.0 &&
+                transform.sampling in listOf("Nearest", "Smooth", "High quality")) { "The transform exceeds the supported range." }
+        }
+    }
+
     private fun updateRecord(base: CompProjectReader.Project, layer: CompProjectReader.Layer, record: JSONObject,
         transform: CompProjectReader.LayerTransform) {
         val previous = JSONObject(record.getJSONObject("transform").toString())
         writeTransform(record.getJSONObject("transform"), transform)
         if (layer.maskFile != null) {
             val size = requireNotNull(base.maskSizes[layer.maskFile])
-            val placement = if (size.width == 1 && size.height == 1) null
-                else if (record.optBoolean("maskLinked", true)) layer.maskTransform?.let {
-                    TransformPlacement.following(it, layer.transform, transform)
-                } else layer.maskTransform ?: layer.transform
-            if (placement == null || placement.copy(sampling = transform.sampling) == transform) record.remove("maskPlacement")
+            val placement = maskPlacement(layer, size, record.optBoolean("maskLinked", true), transform)
+            if (placement == null) record.remove("maskPlacement")
             else {
                 val value = record.optJSONObject("maskPlacement") ?: previous
                 writeTransform(value, placement)

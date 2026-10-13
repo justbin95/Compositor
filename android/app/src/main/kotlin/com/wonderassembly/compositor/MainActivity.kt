@@ -283,6 +283,23 @@ class MainActivity : Activity() {
             }
         }
         canvasPreviewView.onTransformActivityChanged = { updateCanvasTools() }
+        canvasPreviewView.onGroupPreviewRequested = { preview, cancelled, accept ->
+            val edits = committedPreviewEdits(preview)
+            worker.execute {
+                if (!cancelled()) {
+                    var rendered: android.graphics.Bitmap? = null
+                    var failure: String? = null
+                    try {
+                        rendered = groupPreviewRenderer().render(preview, cancelled, { _, _ -> }, editedAssets = edits).bitmap
+                    } catch (error: Exception) { failure = error.message }
+                    runOnUiThread {
+                        val current = !cancelled()
+                        accept(rendered)
+                        if (rendered == null && current && failure != null) statusText.text = failure
+                    }
+                }
+            }
+        }
         canvasPreviewView.onBrushHistoryChanged = { updateBrushHistoryButtons() }
         canvasPreviewView.onBrushHistoryLimitReached = {
             statusText.text = getString(R.string.brush_history_budget_exceeded_status)
@@ -1282,6 +1299,10 @@ class MainActivity : Activity() {
         canvasPreviewView.showMessage(project, getString(R.string.layer_loading_canvas_message))
         updateCanvasTools(layer)
         releaseInactiveLayerSources()
+        if (layer.group) {
+            showGroupPreview(project, layer)
+            return
+        }
         if (layer.imageFile == null) {
             previewRequestId.incrementAndGet()
             canvasPreviewView.showMessage(project, getString(if (layer.group) R.string.group_transform_hint else R.string.layer_has_no_pixels_message))
@@ -1350,6 +1371,56 @@ class MainActivity : Activity() {
                     statusText.text = message
                 }
                 exportTask?.takeIf { it.result != null }?.let(::monitorExportTask)
+            }
+        }
+    }
+
+    private fun committedPreviewEdits(project: CompProjectReader.Project): Map<String, LayerEditingSession> =
+        project.layers.mapNotNull { layer ->
+            val file = layer.imageFile ?: return@mapNotNull null
+            val session = layerEditingSessions[layerEditingSessionKey(selectedProjectUri, project, layer)]
+            if (session?.hasCommittedChanges == true) file to session else null
+        }.toMap()
+
+    private fun groupPreviewRenderer() = PreviewCompositeRenderer(this, {
+        val budget = AndroidRasterBudget.capture(this)
+        // Keep the committed frame, previous draft and new frame within one output allowance.
+        val bytes = budget.maxSingleBitmapBytes / 3
+        require(bytes >= 4) { "There is not enough available memory to preview this group transform." }
+        budget.copy(maxSingleBitmapBytes = bytes, maxMaskCacheBytes = budget.maxMaskCacheBytes / 3,
+            maxPreviewSide = minOf(1024, budget.maxPreviewSide, kotlin.math.sqrt((bytes / 4).toDouble()).toInt()))
+    })
+
+    private fun showGroupPreview(project: CompProjectReader.Project, group: CompProjectReader.Layer) {
+        val request = previewRequestId.incrementAndGet()
+        if (runCatching { GroupTransformPlan.forGroup(project, group.id) }.isFailure) {
+            canvasPreviewView.showMessage(project, getString(R.string.group_transform_hint))
+            updateCanvasTools(group)
+            return
+        }
+        val edits = committedPreviewEdits(project)
+        worker.execute {
+            var result: PreviewCompositeRenderer.Result? = null
+            var failure: String? = null
+            try {
+                result = groupPreviewRenderer().render(project,
+                    { request != previewRequestId.get() || isFinishing || isDestroyed }, { _, _ -> }, editedAssets = edits)
+            } catch (error: Exception) { failure = error.message }
+            runOnUiThread {
+                val completed = result
+                if (request != previewRequestId.get() || isFinishing || isDestroyed) completed?.bitmap?.recycle()
+                else if (completed != null) {
+                    val limits = completed.limitations.map(::limitationLabel).joinToString(", ")
+                        .ifBlank { getString(R.string.composite_no_known_limits) }
+                    val note = getString(R.string.group_canvas_preview_note, limits)
+                    canvasPreviewView.showGroup(project, group, completed.bitmap, note)
+                    canvasPreviewView.setTransformMode(canvasTransformLayerId == group.id)
+                    statusText.text = note
+                    updateCanvasTools(group)
+                } else {
+                    canvasPreviewView.showMessage(project, failure ?: getString(R.string.composite_failed_message))
+                    updateCanvasTools(group)
+                }
             }
         }
     }
