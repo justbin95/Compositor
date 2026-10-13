@@ -1,5 +1,7 @@
 # Android 验证与接续记录
 
+最新开发：[FOLDER07文件夹独立版本与无引用资源回收](folder07-20261013.zh-CN.md)。65JVM、Lint0错误/6建议、ARM64/仪器构建通过；生产SAF接口在本地合成提供方重开验证。用户继续暂缓真机，本轮无ADB/安装/设备操作；[新增11项清单](folder07-device-checklist.zh-CN.md)与恢复/历史旧清单均保持未跑。独立目录副本不等于原位替换，提供方持久性/真实中断/Mac未验收；下一独立开发为大图分块合成。
+
 最新开发：[RECOVERY06内部安全副本](recovery06-20261012.zh-CN.md)。冻结已提交像素、原子发布/轮换、恢复与清理入口；55JVM及200次Windows文件故障注入有证据，Android仪器仅编译。用户明确暂缓真机，本轮无ADB/安装，所有真实设备项记录在[待测清单](recovery06-device-checklist.zh-CN.md)，不继承旧包PASS。外部原位保存、Android恢复实测、分块与Mac未完成。
 
 最新开发阶段：[HISTORY05 文档统一历史](document-history05-20261012.zh-CN.md)。48项JVM、Lint0错误/6建议、ARM64与仪器APK构建通过；新APK身份在记录中。设备使用中，本轮不安装/切应用，设备及Mac未运行；旧LOCAL03/INPUT04证据不用于此包。安全保存、恢复、分块和完整Mac对齐仍待推进。
