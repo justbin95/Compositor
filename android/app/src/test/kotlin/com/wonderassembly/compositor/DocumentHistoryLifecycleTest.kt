@@ -71,6 +71,30 @@ class DocumentHistoryLifecycleTest {
         assertFalse(imported.archiveCacheDirectory!!.exists())
     }
 
+    @Test fun metadataUndoRedoAcrossRecreationRestoresManifestAndDirtyState() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        var activity = controller.get()
+        val base = BlankProjectCreator(activity) { AndroidRasterBudget(64L shl 20, 64L shl 20, 64L shl 20, 2048) }
+            .create(16, 16, 72.0) { false }
+        val changed = ProjectLayerMetadataEditor(activity).update(base, base.layers.single().id, "Renamed", false, 0.3)
+        field("currentProject").set(activity, changed)
+        field("documentStructureChanged").setBoolean(activity, true)
+        val history = DocumentHistory<DocumentEdit>(1L shl 20)
+        field("documentHistory").set(activity, history)
+        assertTrue(history.record(DocumentEdit.Metadata(base, changed, base.layers.single().id, false), 4096))
+        apply(activity, false)
+        assertArrayEquals(base.originalManifestBytes, (field("currentProject").get(activity) as CompProjectReader.Project).originalManifestBytes)
+        assertFalse(field("documentStructureChanged").getBoolean(activity))
+        controller.recreate()
+        activity = controller.get()
+        apply(activity, true)
+        assertArrayEquals(changed.originalManifestBytes, (field("currentProject").get(activity) as CompProjectReader.Project).originalManifestBytes)
+        assertTrue(field("documentStructureChanged").getBoolean(activity))
+        assertTrue(base.archiveCacheDirectory!!.exists())
+        controller.pause().stop().destroy()
+        assertFalse(base.archiveCacheDirectory.exists())
+    }
+
     private fun apply(activity: MainActivity, redo: Boolean) =
         MainActivity::class.java.getDeclaredMethod("applyDocumentHistory", Boolean::class.javaPrimitiveType)
             .apply { isAccessible = true }.invoke(activity, redo)

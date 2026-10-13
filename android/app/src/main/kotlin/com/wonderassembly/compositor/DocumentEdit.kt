@@ -4,6 +4,12 @@ import com.wonderassembly.compositor.core.ChunkedStrokePatch
 
 internal sealed interface DocumentEdit {
     data class Stroke(val layerId: String, val patch: ChunkedStrokePatch) : DocumentEdit
+    data class Metadata(
+        val before: CompProjectReader.Project,
+        val after: CompProjectReader.Project,
+        val layerId: String,
+        val previousStructureChanged: Boolean
+    ) : DocumentEdit
     data class Append(
         val before: CompProjectReader.Project,
         val after: CompProjectReader.Project,

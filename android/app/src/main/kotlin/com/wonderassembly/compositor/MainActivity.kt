@@ -60,6 +60,9 @@ class MainActivity : Activity() {
     private lateinit var exportCanvasButton: Button
     private lateinit var cancelExportButton: Button
     private lateinit var compositeButton: Button
+    private lateinit var moveLayerUpButton: Button
+    private lateinit var moveLayerDownButton: Button
+    private lateinit var layerPropertiesButton: Button
     private lateinit var addImageButton: Button
     private lateinit var eraserButton: Button
     private lateinit var brushSettingsButton: Button
@@ -360,6 +363,12 @@ class MainActivity : Activity() {
         addImageButton = toolButton(getString(R.string.canvas_tool_add_image)) { chooseImage(append = true) }
         canvasToolRow.addView(toolButton(getString(R.string.recovery_copies_button)) { showRecoveryCopies() })
         canvasToolRow.addView(addImageButton)
+        layerPropertiesButton = toolButton(getString(R.string.layer_properties)) { showLayerProperties() }
+        canvasToolRow.addView(layerPropertiesButton)
+        moveLayerUpButton = toolButton(getString(R.string.layer_move_up)) { moveSelectedLayer(1) }
+        moveLayerDownButton = toolButton(getString(R.string.layer_move_down)) { moveSelectedLayer(-1) }
+        canvasToolRow.addView(moveLayerUpButton)
+        canvasToolRow.addView(moveLayerDownButton)
         canvasToolScroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             isFillViewport = false
@@ -828,6 +837,93 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun moveSelectedLayer(direction: Int) {
+        val base = currentProject ?: return
+        val layer = base.layers.find { it.id == selectedLayerId } ?: return
+        changeLayerMetadata(base, layer.id, layer.name, layer.visible, layer.opacity, direction)
+    }
+
+    private fun showLayerProperties() {
+        val base = currentProject ?: return
+        val layer = base.layers.find { it.id == selectedLayerId } ?: return
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke) return
+        val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), 0) }
+        val name = EditText(this).apply { setText(layer.name); hint = getString(R.string.layer_name) }
+        val opacity = EditText(this).apply {
+            setText(NumberFormat.getNumberInstance(java.util.Locale.US).apply {
+                isGroupingUsed = false; maximumFractionDigits = 340
+            }.format(layer.opacity * 100)); hint = getString(R.string.layer_opacity)
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val visible = android.widget.CheckBox(this).apply { text = getString(R.string.layer_visible); isChecked = layer.visible }
+        fields.addView(text(getString(R.string.layer_name), 14, primaryText))
+        fields.addView(name)
+        fields.addView(text(getString(R.string.layer_opacity), 14, primaryText))
+        fields.addView(opacity)
+        fields.addView(visible)
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.layer_properties).setView(fields)
+            .setPositiveButton(android.R.string.ok, null).setNegativeButton(android.R.string.cancel, null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val newName = name.text.toString()
+                val percent = opacity.text.toString().toDoubleOrNull()
+                if (newName.isBlank() || newName.toByteArray(Charsets.UTF_8).size > 16384) {
+                    name.error = getString(R.string.layer_name_invalid); return@setOnClickListener
+                }
+                if (percent == null || !percent.isFinite() || percent !in 0.0..100.0) {
+                    opacity.error = getString(R.string.layer_opacity_invalid); return@setOnClickListener
+                }
+                if (currentProject !== base || selectedLayerId != layer.id) { dialog.dismiss(); return@setOnClickListener }
+                changeLayerMetadata(base, layer.id, newName, visible.isChecked,
+                    if (percent == layer.opacity * 100) layer.opacity else percent / 100)
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun changeLayerMetadata(base: CompProjectReader.Project, layerId: String,
+        name: String, visible: Boolean, opacity: Double, move: Int = 0) {
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke) return
+        val request = projectOpenRequestId.incrementAndGet()
+        setProjectOpenActive(true)
+        worker.execute {
+            var candidate: CompProjectReader.Project? = null
+            var failure: String? = null
+            try {
+                val editor = ProjectLayerMetadataEditor(applicationContext)
+                candidate = if (move == 0) editor.update(base, layerId, name, visible, opacity)
+                    else editor.move(base, layerId, move)
+            } catch (error: Exception) { failure = error.message }
+            catch (_: OutOfMemoryError) { failure = getString(R.string.project_open_memory_failure_status) }
+            val completed = candidate
+            runOnUiThread {
+                if (request != projectOpenRequestId.get() || isFinishing || isDestroyed || currentProject !== base) return@runOnUiThread
+                setProjectOpenActive(false)
+                if (completed == null) {
+                    statusText.text = getString(R.string.project_open_preserved_status, failure.orEmpty())
+                    return@runOnUiThread
+                }
+                if (completed === base) return@runOnUiThread
+                refreshHistoryBudget()
+                val edit = DocumentEdit.Metadata(base, completed, layerId, documentStructureChanged)
+                if (!documentHistory.record(edit, base.originalManifestBytes.size.toLong() + completed.originalManifestBytes.size)) {
+                    statusText.text = getString(R.string.brush_history_budget_exceeded_status)
+                    return@runOnUiThread
+                }
+                previewRequestId.incrementAndGet()
+                canvasPreviewView.clear(getString(R.string.choose_project_status))
+                documentStructureChanged = true
+                markRecoveryEdited()
+                if (exportTask?.result != null) exportTask = null
+                selectedLayerId = layerId
+                showProject(completed)
+                reclaimUnusedDocumentResources()
+                requestInternalRecovery()
+            }
+        }
+    }
+
     private fun appendImageLayer(uri: Uri) {
         val base = currentProject ?: return
         if (exportFlowActive || projectOpenInProgress) return
@@ -1125,6 +1221,12 @@ class MainActivity : Activity() {
         exportCanvasButton.isEnabled = currentProject != null && !busy
         saveProjectFolderButton.isEnabled = currentProject != null && !busy
         compositeButton.isEnabled = currentProject != null && !busy
+        val selected = currentProject?.layers?.find { it.id == selectedLayerId }
+        val siblings = currentProject?.layers.orEmpty().filter { selected != null && it.parentId == selected.parentId }
+        val position = siblings.indexOf(selected)
+        moveLayerUpButton.isEnabled = !busy && !canvasPreviewView.hasActiveStroke && position >= 0 && position < siblings.lastIndex
+        moveLayerDownButton.isEnabled = !busy && !canvasPreviewView.hasActiveStroke && position > 0
+        layerPropertiesButton.isEnabled = selectedLayerId != null && !busy && !canvasPreviewView.hasActiveStroke
         addImageButton.isEnabled = currentProject != null && !busy && currentProject!!.layers.size < 10
         cancelExportButton.visibility = if (exportTask?.result == null && exportTask != null) View.VISIBLE else View.GONE
         cancelExportButton.isEnabled = exportTask?.cancellationRequested == false
@@ -1436,6 +1538,13 @@ class MainActivity : Activity() {
                         if (redo) edit.patch.redo() else edit.patch.undo()
                         selectedLayerId = edit.layerId
                     }
+                    is DocumentEdit.Metadata -> {
+                        val target = if (redo) edit.after else edit.before
+                        currentProject = target.copy(additionalCacheDirectories =
+                            (target.additionalCacheDirectories + project.additionalCacheDirectories).distinct())
+                        selectedLayerId = edit.layerId
+                        documentStructureChanged = if (redo) true else edit.previousStructureChanged
+                    }
                     is DocumentEdit.Append -> {
                         val target = if (redo) edit.after else edit.before
                         // Retain private files while the history or a background task still uses them.
@@ -1469,7 +1578,13 @@ class MainActivity : Activity() {
         val project = currentProject ?: return
         if (exportFlowActive || projectOpenInProgress) return
         val edits = documentHistory.retainedEdits()
-        val projects = listOf(project) + edits.filterIsInstance<DocumentEdit.Append>().flatMap { listOf(it.before, it.after) }
+        val projects = listOf(project) + edits.flatMap {
+            when (it) {
+                is DocumentEdit.Append -> listOf(it.before, it.after)
+                is DocumentEdit.Metadata -> listOf(it.before, it.after)
+                is DocumentEdit.Stroke -> emptyList()
+            }
+        }
         val layerIds = projects.flatMap { it.layers }.map { it.id }.toSet() +
             edits.filterIsInstance<DocumentEdit.Stroke>().map { it.layerId }
         val obsolete = layerEditingSessions.keys.filter { it.substringAfterLast('|') !in layerIds }
