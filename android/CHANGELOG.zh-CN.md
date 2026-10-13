@@ -1,5 +1,7 @@
 # Compositor Android 更新日志
 
+最新HANDLES11：[画布移动/缩放/旋转手柄与比例锁](validation/handles11-20261013.zh-CN.md)。89JVM、Lint0错误/6建议、ARM64/仪器构建通过；一次拖动一个历史步骤，取消/双指/重建和预算拒绝有本地证据。[6项待测](validation/handles11-device-checklist.zh-CN.md)全NOT_RUN，无模拟器安装/ADB/设备操作。数值比例联动、组多选、独立蒙版与全部Mac对齐继续保留。
+
 最新TRANSFORM10：[单图层位置/尺寸/旋转/翻转/采样与蒙版联动](validation/transform10-20261013.zh-CN.md)。81JVM、Lint0错误/6建议、ARM64/仪器构建通过；[6项真机清单](validation/transform10-device-checklist.zh-CN.md)全NOT_RUN，无ADB/安装。仅数值变换，拖拽手柄/比例锁/组多选/独立蒙版及全部Mac对齐继续保留。
 
 最新LAYER09：[图层名称/显示/透明度/同级排序及统一历史](validation/layer09-20261013.zh-CN.md)。78JVM、Lint0错误/6建议、ARM64与仪器构建通过；[7项真机清单](validation/layer09-device-checklist.zh-CN.md)全NOT_RUN，无ADB/安装。下一独立开发为图层变换，完整Mac对齐仍继续。
