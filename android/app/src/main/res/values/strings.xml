@@ -178,6 +178,10 @@
     <string name="layer_move_up">Move Up</string>
     <string name="layer_move_down">Move Down</string>
     <string name="layer_transform">Transform Layer</string>
+    <string name="layer_lock_ratio">Lock Aspect Ratio</string>
+    <string name="layer_scale_percent">Scale (%)</string>
+    <string name="layer_scale_hint">100% uses the original image size. Scale changes both dimensions about the center, even with the ratio unlocked.</string>
+    <string name="layer_transform_numeric_invalid">Use finite numbers within the transform limits. Scale: 0.1–30,000%; the resulting position and dimensions must also fit.</string>
     <string name="layer_flip_horizontal">Flip Horizontal</string>
     <string name="layer_flip_vertical">Flip Vertical</string>
     <string name="layer_sampling">Sampling</string>

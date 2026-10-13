@@ -891,6 +891,68 @@ class MainActivity : Activity() {
                 fields.addView(this)
             }
         }
+        val pixels = base.imageSizes[layer.imageFile] ?: return
+        var draft = transform
+        var syncing = false
+        fun format(value: Double) = NumberFormat.getNumberInstance(java.util.Locale.US).apply {
+            isGroupingUsed = false; maximumFractionDigits = 340
+        }.format(value)
+        val ratio = android.widget.CheckBox(this).apply {
+            text = getString(R.string.layer_lock_ratio)
+            isChecked = canvasPreviewView.locksTransformRatio
+            setOnCheckedChangeListener { _, checked ->
+                canvasPreviewView.locksTransformRatio = checked
+                updateCanvasTools()
+            }
+        }
+        fields.addView(ratio)
+        fields.addView(text(getString(R.string.layer_scale_percent), 14, primaryText))
+        val scale = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(format(NumericLayerTransform.scalePercent(transform, pixels)))
+            fields.addView(this)
+        }
+        fields.addView(text(getString(R.string.layer_scale_hint), 12, secondaryText))
+        fun sync(indices: List<Int>, updateScale: Boolean) {
+            syncing = true
+            try {
+                val numbers = listOf(draft.x, draft.y, draft.width, draft.height, draft.rotation)
+                indices.forEach { index -> inputs[index].setText(format(numbers[index])); inputs[index].error = null }
+                if (updateScale) { scale.setText(format(NumericLayerTransform.scalePercent(draft, pixels))); scale.error = null }
+            } finally { syncing = false }
+        }
+        fun watch(input: EditText, change: (Double) -> Unit) {
+            input.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    if (syncing) return
+                    input.error = null
+                    try {
+                        val number = requireNotNull(s.toString().toDoubleOrNull())
+                        require(number.isFinite())
+                        change(number)
+                    } catch (_: IllegalArgumentException) {
+                        input.error = getString(R.string.layer_transform_numeric_invalid)
+                    }
+                }
+            })
+        }
+        inputs.forEachIndexed { index, input -> watch(input) { number ->
+            draft = when (index) {
+                0 -> NumericLayerTransform.validated(draft.copy(x = number))
+                1 -> NumericLayerTransform.validated(draft.copy(y = number))
+                2, 3 -> NumericLayerTransform.resize(draft, number, index == 2, ratio.isChecked)
+                else -> NumericLayerTransform.validated(draft.copy(rotation = number))
+            }
+            if (index == 2 || index == 3) sync(if (ratio.isChecked) listOf(if (index == 2) 3 else 2) else emptyList(), true)
+        } }
+        watch(scale) { number ->
+            // A scale edit must not replace an invalid, unfinished position or dimension field.
+            require(inputs.all { it.error == null })
+            draft = NumericLayerTransform.scale(draft, pixels, number)
+            sync(listOf(0, 1, 2, 3), false)
+        }
         val flipX = android.widget.CheckBox(this).apply { text = getString(R.string.layer_flip_horizontal); isChecked = transform.flipX }
         val flipY = android.widget.CheckBox(this).apply { text = getString(R.string.layer_flip_vertical); isChecked = transform.flipY }
         fields.addView(flipX); fields.addView(flipY)
@@ -906,6 +968,7 @@ class MainActivity : Activity() {
             .setPositiveButton(android.R.string.ok, null).setNegativeButton(android.R.string.cancel, null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (inputs.any { it.error != null } || scale.error != null) return@setOnClickListener
                 val numbers = inputs.map { it.text.toString().toDoubleOrNull() }
                 val invalid = numbers.indexOfFirst { it == null || !it.isFinite() }
                 if (invalid >= 0) { inputs[invalid].error = getString(R.string.layer_transform_invalid); return@setOnClickListener }
