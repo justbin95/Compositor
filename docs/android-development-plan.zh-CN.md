@@ -468,6 +468,8 @@ Codex自行完成：目录结构、依赖版本、普通界面细节、算法移
 
 ### 15.0 本轮最新快照（2026-10-13，本地继续开发）
 
+- LAYER09：图层名称/Visible/透明度及同父组上移下移已接入，候选清单生产校验、既有v3/v8窄升级、未知字段/素材保护；统一Metadata历史、恢复版本与资源回收。业务源码9c2165e，78JVM（app57/core21）、Lint0错误/6建议、ARM64/仪器构建通过；[实际记录](../android/validation/layer09-20261013.zh-CN.md)。[7项真机清单](../android/validation/layer09-device-checklist.zh-CN.md)全NOT_RUN，用户暂缓设备，无ADB/安装；Mac和提供方/设备未验收。下一步为图层位置/尺寸/旋转/翻转及统一历史，继续全部PARITY；跨组归组/完整图层管理、GPU/容量与外部安全保存保持未完成。
+
 - TILE08：PNG已按预算条带/≤256块流式合成，源/蒙版逆变换区域解码、超预算细分、已提交块覆盖、全局像素中心与预乘双线性保证跨块一致；JPEG保留整图准入。业务源码ee6f12f，71JVM、七模式185万余像素最大通道差0、蒙版/剪贴/笔迹/预算/取消自动检查及Lint/ARM64/仪器构建通过；[记录](../android/validation/tile08-20261013.zh-CN.md)。本地区域解码采用显式测试裁剪适配器，生产Android解码/原生峰值/速度/Mac仍待测；[8项清单](../android/validation/tile08-device-checklist.zh-CN.md)NOT_RUN。用户要求连续开发，继续图层命名/显示/透明度和统一历史；不将本阶段视为正式GPU/全部容量/完整PARITY验收。
 
 
