@@ -62,6 +62,7 @@ class MainActivity : Activity() {
     private lateinit var compositeButton: Button
     private lateinit var moveLayerUpButton: Button
     private lateinit var moveLayerDownButton: Button
+    private lateinit var transformLayerButton: Button
     private lateinit var layerPropertiesButton: Button
     private lateinit var addImageButton: Button
     private lateinit var eraserButton: Button
@@ -365,6 +366,8 @@ class MainActivity : Activity() {
         canvasToolRow.addView(addImageButton)
         layerPropertiesButton = toolButton(getString(R.string.layer_properties)) { showLayerProperties() }
         canvasToolRow.addView(layerPropertiesButton)
+        transformLayerButton = toolButton(getString(R.string.layer_transform)) { showLayerTransform() }
+        canvasToolRow.addView(transformLayerButton)
         moveLayerUpButton = toolButton(getString(R.string.layer_move_up)) { moveSelectedLayer(1) }
         moveLayerDownButton = toolButton(getString(R.string.layer_move_down)) { moveSelectedLayer(-1) }
         canvasToolRow.addView(moveLayerUpButton)
@@ -837,6 +840,61 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showLayerTransform() {
+        val base = currentProject ?: return
+        val layer = base.layers.find { it.id == selectedLayerId } ?: return
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke || layer.group || layer.adjustment || layer.imageFile == null) return
+        val transform = layer.transform
+        val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), 0) }
+        val labels = listOf("X", "Y", "Width", "Height", "Rotation (°)")
+        val values = listOf(transform.x, transform.y, transform.width, transform.height, transform.rotation)
+        val inputs = values.mapIndexed { index, value ->
+            fields.addView(text(labels[index], 14, primaryText))
+            EditText(this).apply {
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
+                setText(NumberFormat.getNumberInstance(java.util.Locale.US).apply {
+                    isGroupingUsed = false; maximumFractionDigits = 340
+                }.format(value))
+                fields.addView(this)
+            }
+        }
+        val flipX = android.widget.CheckBox(this).apply { text = getString(R.string.layer_flip_horizontal); isChecked = transform.flipX }
+        val flipY = android.widget.CheckBox(this).apply { text = getString(R.string.layer_flip_vertical); isChecked = transform.flipY }
+        fields.addView(flipX); fields.addView(flipY)
+        fields.addView(text(getString(R.string.layer_sampling), 14, primaryText))
+        val modes = listOf("Nearest", "Smooth", "High quality")
+        val sampling = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, modes)
+            setSelection(modes.indexOf(transform.sampling))
+        }
+        fields.addView(sampling)
+        val scroll = android.widget.ScrollView(this).apply { addView(fields) }
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.layer_transform).setView(scroll)
+            .setPositiveButton(android.R.string.ok, null).setNegativeButton(android.R.string.cancel, null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val numbers = inputs.map { it.text.toString().toDoubleOrNull() }
+                val invalid = numbers.indexOfFirst { it == null || !it.isFinite() }
+                if (invalid >= 0) { inputs[invalid].error = getString(R.string.layer_transform_invalid); return@setOnClickListener }
+                val valid = numbers.map { requireNotNull(it) }
+                val bad = valid.indices.firstOrNull { index ->
+                    when (index) {
+                        0, 1 -> kotlin.math.abs(valid[index]) > 1_000_000
+                        2, 3 -> valid[index] !in 1.0..300_000.0
+                        else -> kotlin.math.abs(valid[index]) > 360
+                    }
+                }
+                if (bad != null) { inputs[bad].error = getString(R.string.layer_transform_invalid); return@setOnClickListener }
+                if (currentProject !== base || selectedLayerId != layer.id) { dialog.dismiss(); return@setOnClickListener }
+                val changed = transform.copy(x = valid[0], y = valid[1], width = valid[2], height = valid[3],
+                    rotation = valid[4], flipX = flipX.isChecked, flipY = flipY.isChecked, sampling = modes[sampling.selectedItemPosition])
+                changeLayerMetadata(base, layer.id, layer.name, layer.visible, layer.opacity, transform = changed)
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
     private fun moveSelectedLayer(direction: Int) {
         val base = currentProject ?: return
         val layer = base.layers.find { it.id == selectedLayerId } ?: return
@@ -883,7 +941,7 @@ class MainActivity : Activity() {
     }
 
     private fun changeLayerMetadata(base: CompProjectReader.Project, layerId: String,
-        name: String, visible: Boolean, opacity: Double, move: Int = 0) {
+        name: String, visible: Boolean, opacity: Double, move: Int = 0, transform: CompProjectReader.LayerTransform? = null) {
         if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveStroke) return
         val request = projectOpenRequestId.incrementAndGet()
         setProjectOpenActive(true)
@@ -892,7 +950,8 @@ class MainActivity : Activity() {
             var failure: String? = null
             try {
                 val editor = ProjectLayerMetadataEditor(applicationContext)
-                candidate = if (move == 0) editor.update(base, layerId, name, visible, opacity)
+                candidate = if (transform != null) ProjectLayerTransformEditor(applicationContext).update(base, layerId, transform)
+                    else if (move == 0) editor.update(base, layerId, name, visible, opacity)
                     else editor.move(base, layerId, move)
             } catch (error: Exception) { failure = error.message }
             catch (_: OutOfMemoryError) { failure = getString(R.string.project_open_memory_failure_status) }
@@ -1222,6 +1281,7 @@ class MainActivity : Activity() {
         saveProjectFolderButton.isEnabled = currentProject != null && !busy
         compositeButton.isEnabled = currentProject != null && !busy
         val selected = currentProject?.layers?.find { it.id == selectedLayerId }
+        transformLayerButton.isEnabled = !busy && !canvasPreviewView.hasActiveStroke && selected?.imageFile != null && !selected.group && !selected.adjustment
         val siblings = currentProject?.layers.orEmpty().filter { selected != null && it.parentId == selected.parentId }
         val position = siblings.indexOf(selected)
         moveLayerUpButton.isEnabled = !busy && !canvasPreviewView.hasActiveStroke && position >= 0 && position < siblings.lastIndex

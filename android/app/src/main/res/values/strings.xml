@@ -177,4 +177,9 @@
     <string name="layer_opacity_invalid">Enter a number between 0 and 100.</string>
     <string name="layer_move_up">Move Up</string>
     <string name="layer_move_down">Move Down</string>
+    <string name="layer_transform">Transform Layer</string>
+    <string name="layer_flip_horizontal">Flip Horizontal</string>
+    <string name="layer_flip_vertical">Flip Vertical</string>
+    <string name="layer_sampling">Sampling</string>
+    <string name="layer_transform_invalid">Use finite numbers: position ±1,000,000; size 1–300,000; rotation ±360°.</string>
 </resources>

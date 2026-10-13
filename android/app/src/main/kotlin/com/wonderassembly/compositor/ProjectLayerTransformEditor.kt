@@ -1,0 +1,88 @@
+package com.wonderassembly.compositor
+
+import android.content.Context
+import org.json.JSONObject
+import kotlin.math.*
+
+internal class ProjectLayerTransformEditor(private val context: Context) {
+    fun update(base: CompProjectReader.Project, layerId: String,
+        transform: CompProjectReader.LayerTransform): CompProjectReader.Project {
+        val layer = base.layers.single { it.id == layerId }
+        require(!layer.group && !layer.adjustment && layer.imageFile != null) { "Select a pixel layer to transform." }
+        require(listOf(transform.x, transform.y, transform.width, transform.height, transform.rotation).all { it.isFinite() } &&
+            abs(transform.x) <= 1_000_000 && abs(transform.y) <= 1_000_000 &&
+            transform.width in 1.0..300_000.0 && transform.height in 1.0..300_000.0 && abs(transform.rotation) <= 360 &&
+            transform.sampling in listOf("Nearest", "Smooth", "High quality")) { "The transform exceeds the supported range." }
+        if (transform == layer.transform) return base
+        val manifest = JSONObject(String(base.originalManifestBytes, Charsets.UTF_8))
+        val records = manifest.getJSONArray("layers")
+        val record = (0 until records.length()).map { records.getJSONObject(it) }
+            .single { it.getString("id").equals(layerId, ignoreCase = true) }
+        val previous = JSONObject(record.getJSONObject("transform").toString())
+        writeTransform(record.getJSONObject("transform"), transform)
+        if (layer.maskFile != null) {
+            val size = requireNotNull(base.maskSizes[layer.maskFile])
+            val placement = if (size.width == 1 && size.height == 1) null
+                else if (record.optBoolean("maskLinked", true)) layer.maskTransform?.let {
+                    TransformPlacement.following(it, layer.transform, transform)
+                } else layer.maskTransform ?: layer.transform
+            if (placement == null || placement.copy(sampling = transform.sampling) == transform) record.remove("maskPlacement")
+            else {
+                val value = record.optJSONObject("maskPlacement") ?: previous
+                writeTransform(value, placement)
+                record.put("maskPlacement", value)
+            }
+        }
+        return CompProjectReader(context).readProject(base.sourceUri, base.packageFolderName,
+            manifest.toString().toByteArray(Charsets.UTF_8), base.packageAssets, base.archiveCacheDirectory)
+            .copy(additionalCacheDirectories = base.additionalCacheDirectories)
+    }
+
+    private fun writeTransform(value: JSONObject, transform: CompProjectReader.LayerTransform) {
+        value.getJSONObject("origin").put("x", transform.x).put("y", transform.y)
+        value.getJSONObject("size").put("width", transform.width).put("height", transform.height)
+        value.put("rotation", transform.rotation).put("flipX", transform.flipX).put("flipY", transform.flipY)
+            .put("sampling", transform.sampling)
+    }
+}
+
+/** Matches macOS LayerTransform.following/placing, including its deliberate removal of shear. */
+internal object TransformPlacement {
+    private data class Affine(val a: Double, val b: Double, val c: Double, val d: Double, val x: Double, val y: Double) {
+        fun times(other: Affine) = Affine(a * other.a + c * other.b, b * other.a + d * other.b,
+            a * other.c + c * other.d, b * other.c + d * other.d,
+            a * other.x + c * other.y + x, b * other.x + d * other.y + y)
+        fun inverse(): Affine {
+            val determinant = a * d - b * c
+            require(determinant.isFinite() && determinant != 0.0) { "The transform is not invertible." }
+            return Affine(d / determinant, -b / determinant, -c / determinant, a / determinant,
+                (c * y - d * x) / determinant, (b * x - a * y) / determinant)
+        }
+    }
+    private fun matrix(value: CompProjectReader.LayerTransform): Affine {
+        val radians = Math.toRadians(value.rotation)
+        val w = value.width * if (value.flipX) -1 else 1
+        val h = value.height * if (value.flipY) -1 else 1
+        val a = cos(radians) * w; val b = sin(radians) * w
+        val c = -sin(radians) * h; val d = cos(radians) * h
+        return Affine(a, b, c, d, value.x + value.width / 2 - (a + c) / 2,
+            value.y + value.height / 2 - (b + d) / 2)
+    }
+    fun following(value: CompProjectReader.LayerTransform, old: CompProjectReader.LayerTransform,
+        new: CompProjectReader.LayerTransform): CompProjectReader.LayerTransform {
+        if (old == new) return value
+        if (old.width == new.width && old.height == new.height && old.rotation == new.rotation &&
+            old.flipX == new.flipX && old.flipY == new.flipY) return value.copy(x = value.x + new.x - old.x, y = value.y + new.y - old.y)
+        val map = matrix(new).times(matrix(old).inverse()).times(matrix(value))
+        val sign = if (value.flipX) -1.0 else 1.0
+        val angle = atan2(map.b * sign, map.a * sign)
+        val along = -map.c * sin(angle) + map.d * cos(angle)
+        val width = hypot(map.a, map.b); val height = abs(along)
+        val degrees = Math.toDegrees(angle)
+        val turns = (value.rotation - degrees) / 360
+        val nearest = if (turns >= 0) floor(turns + 0.5) else ceil(turns - 0.5)
+        return value.copy(x = map.x + (map.a + map.c) / 2 - width / 2,
+            y = map.y + (map.b + map.d) / 2 - height / 2, width = width, height = height,
+            rotation = degrees + nearest * 360, flipY = along < 0)
+    }
+}
