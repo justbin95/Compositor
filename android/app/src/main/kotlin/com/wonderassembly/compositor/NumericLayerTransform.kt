@@ -14,13 +14,20 @@ internal object NumericLayerTransform {
     }
 
     fun scalePercent(value: CompProjectReader.LayerTransform, pixels: CompProjectReader.PixelSize): Double =
-        value.width / pixels.width.coerceAtLeast(1) * 100
+        scalePercent(value, pixels.width.toDouble())
+
+    fun scalePercent(value: CompProjectReader.LayerTransform, sourceWidth: Double): Double =
+        value.width / sourceWidth.coerceAtLeast(1.0) * 100
 
     fun scale(value: CompProjectReader.LayerTransform, pixels: CompProjectReader.PixelSize,
+        percent: Double): CompProjectReader.LayerTransform = scale(value, pixels.width.toDouble(), pixels.height.toDouble(), percent)
+
+    fun scale(value: CompProjectReader.LayerTransform, sourceWidth: Double, sourceHeight: Double,
         percent: Double): CompProjectReader.LayerTransform {
+        require(sourceWidth.isFinite() && sourceHeight.isFinite() && sourceWidth >= 1 && sourceHeight >= 1)
         require(percent.isFinite() && percent in 0.1..30_000.0)
-        val width = pixels.width * percent / 100
-        val height = pixels.height * percent / 100
+        val width = sourceWidth * percent / 100
+        val height = sourceHeight * percent / 100
         return validated(value.copy(x = value.x + value.width / 2 - width / 2,
             y = value.y + value.height / 2 - height / 2, width = width, height = height))
     }

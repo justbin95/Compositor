@@ -7,17 +7,43 @@ import kotlin.math.*
 internal class ProjectLayerTransformEditor(private val context: Context) {
     fun update(base: CompProjectReader.Project, layerId: String,
         transform: CompProjectReader.LayerTransform): CompProjectReader.Project {
-        val layer = base.layers.single { it.id == layerId }
-        require(!layer.group && !layer.adjustment && layer.imageFile != null) { "Select a pixel layer to transform." }
-        require(listOf(transform.x, transform.y, transform.width, transform.height, transform.rotation).all { it.isFinite() } &&
-            abs(transform.x) <= 1_000_000 && abs(transform.y) <= 1_000_000 &&
-            transform.width in 1.0..300_000.0 && transform.height in 1.0..300_000.0 && abs(transform.rotation) <= 360 &&
-            transform.sampling in listOf("Nearest", "Smooth", "High quality")) { "The transform exceeds the supported range." }
-        if (transform == layer.transform) return base
+        NumericLayerTransform.validated(transform)
+        return updateAll(base, mapOf(layerId to transform))
+    }
+
+    fun updateGroup(base: CompProjectReader.Project, groupId: String,
+        target: CompProjectReader.LayerTransform): CompProjectReader.Project =
+        updateAll(base, GroupTransformPlan.forGroup(base, groupId).moved(target))
+
+    private fun updateAll(base: CompProjectReader.Project,
+        transforms: Map<String, CompProjectReader.LayerTransform>): CompProjectReader.Project {
+        val layers = base.layers.associateBy { it.id }
+        // Validate every member before touching a candidate. A rejected group never partly moves.
+        for ((id, transform) in transforms) {
+            val layer = requireNotNull(layers[id])
+            require(!layer.group && !layer.adjustment && layer.imageFile != null) { "Select a pixel layer to transform." }
+            require(listOf(transform.x, transform.y, transform.width, transform.height, transform.rotation).all { it.isFinite() } &&
+                abs(transform.x) <= 1_000_000 && abs(transform.y) <= 1_000_000 &&
+                transform.width in 1.0..300_000.0 && transform.height in 1.0..300_000.0 &&
+                transform.sampling in listOf("Nearest", "Smooth", "High quality")) { "The transform exceeds the supported range." }
+        }
+        if (transforms.all { (id, transform) -> transform == layers.getValue(id).transform }) return base
         val manifest = JSONObject(String(base.originalManifestBytes, Charsets.UTF_8))
         val records = manifest.getJSONArray("layers")
-        val record = (0 until records.length()).map { records.getJSONObject(it) }
-            .single { it.getString("id").equals(layerId, ignoreCase = true) }
+        val byId = (0 until records.length()).map { records.getJSONObject(it) }
+            .associateBy { it.getString("id").lowercase(java.util.Locale.ROOT) }
+        for ((id, transform) in transforms) {
+            val layer = layers.getValue(id)
+            if (transform == layer.transform) continue
+            updateRecord(base, layer, byId.getValue(id.lowercase(java.util.Locale.ROOT)), transform)
+        }
+        return CompProjectReader(context).readProject(base.sourceUri, base.packageFolderName,
+            manifest.toString().toByteArray(Charsets.UTF_8), base.packageAssets, base.archiveCacheDirectory)
+            .copy(additionalCacheDirectories = base.additionalCacheDirectories)
+    }
+
+    private fun updateRecord(base: CompProjectReader.Project, layer: CompProjectReader.Layer, record: JSONObject,
+        transform: CompProjectReader.LayerTransform) {
         val previous = JSONObject(record.getJSONObject("transform").toString())
         writeTransform(record.getJSONObject("transform"), transform)
         if (layer.maskFile != null) {
@@ -33,9 +59,6 @@ internal class ProjectLayerTransformEditor(private val context: Context) {
                 record.put("maskPlacement", value)
             }
         }
-        return CompProjectReader(context).readProject(base.sourceUri, base.packageFolderName,
-            manifest.toString().toByteArray(Charsets.UTF_8), base.packageAssets, base.archiveCacheDirectory)
-            .copy(additionalCacheDirectories = base.additionalCacheDirectories)
     }
 
     private fun writeTransform(value: JSONObject, transform: CompProjectReader.LayerTransform) {

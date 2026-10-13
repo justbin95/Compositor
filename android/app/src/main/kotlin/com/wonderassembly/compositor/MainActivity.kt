@@ -876,8 +876,10 @@ class MainActivity : Activity() {
     private fun showLayerTransform() {
         val base = currentProject ?: return
         val layer = base.layers.find { it.id == selectedLayerId } ?: return
-        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveEdit || layer.group || layer.adjustment || layer.imageFile == null) return
-        val transform = layer.transform
+        if (exportFlowActive || projectOpenInProgress || canvasPreviewView.hasActiveEdit || layer.adjustment || (!layer.group && layer.imageFile == null)) return
+        val group = if (layer.group) try { GroupTransformPlan.forGroup(base, layer.id) }
+            catch (error: IllegalArgumentException) { statusText.text = error.message; return } else null
+        val transform = group?.box ?: layer.transform
         val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), 0) }
         val labels = listOf("X", "Y", "Width", "Height", "Rotation (°)")
         val values = listOf(transform.x, transform.y, transform.width, transform.height, transform.rotation)
@@ -891,7 +893,9 @@ class MainActivity : Activity() {
                 fields.addView(this)
             }
         }
-        val pixels = base.imageSizes[layer.imageFile] ?: return
+        val pixels = base.imageSizes[layer.imageFile]
+        val scaleWidth = group?.box?.width ?: pixels?.width?.toDouble() ?: return
+        val scaleHeight = group?.box?.height ?: pixels?.height?.toDouble() ?: return
         var draft = transform
         var syncing = false
         fun format(value: Double) = NumberFormat.getNumberInstance(java.util.Locale.US).apply {
@@ -909,16 +913,16 @@ class MainActivity : Activity() {
         fields.addView(text(getString(R.string.layer_scale_percent), 14, primaryText))
         val scale = EditText(this).apply {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(format(NumericLayerTransform.scalePercent(transform, pixels)))
+            setText(format(NumericLayerTransform.scalePercent(transform, scaleWidth)))
             fields.addView(this)
         }
-        fields.addView(text(getString(R.string.layer_scale_hint), 12, secondaryText))
+        fields.addView(text(getString(if (group == null) R.string.layer_scale_hint else R.string.group_transform_hint), 12, secondaryText))
         fun sync(indices: List<Int>, updateScale: Boolean) {
             syncing = true
             try {
                 val numbers = listOf(draft.x, draft.y, draft.width, draft.height, draft.rotation)
                 indices.forEach { index -> inputs[index].setText(format(numbers[index])); inputs[index].error = null }
-                if (updateScale) { scale.setText(format(NumericLayerTransform.scalePercent(draft, pixels))); scale.error = null }
+                if (updateScale) { scale.setText(format(NumericLayerTransform.scalePercent(draft, scaleWidth))); scale.error = null }
             } finally { syncing = false }
         }
         fun watch(input: EditText, change: (Double) -> Unit) {
@@ -950,21 +954,21 @@ class MainActivity : Activity() {
         watch(scale) { number ->
             // A scale edit must not replace an invalid, unfinished position or dimension field.
             require(inputs.all { it.error == null })
-            draft = NumericLayerTransform.scale(draft, pixels, number)
+            draft = NumericLayerTransform.scale(draft, scaleWidth, scaleHeight, number)
             sync(listOf(0, 1, 2, 3), false)
         }
         val flipX = android.widget.CheckBox(this).apply { text = getString(R.string.layer_flip_horizontal); isChecked = transform.flipX }
         val flipY = android.widget.CheckBox(this).apply { text = getString(R.string.layer_flip_vertical); isChecked = transform.flipY }
         fields.addView(flipX); fields.addView(flipY)
-        fields.addView(text(getString(R.string.layer_sampling), 14, primaryText))
+        if (group == null) fields.addView(text(getString(R.string.layer_sampling), 14, primaryText))
         val modes = listOf("Nearest", "Smooth", "High quality")
         val sampling = android.widget.Spinner(this).apply {
             adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, modes)
             setSelection(modes.indexOf(transform.sampling))
         }
-        fields.addView(sampling)
+        if (group == null) fields.addView(sampling)
         val scroll = android.widget.ScrollView(this).apply { addView(fields) }
-        val dialog = AlertDialog.Builder(this).setTitle(R.string.layer_transform).setView(scroll)
+        val dialog = AlertDialog.Builder(this).setTitle(if (group == null) R.string.layer_transform else R.string.group_transform).setView(scroll)
             .setPositiveButton(android.R.string.ok, null).setNegativeButton(android.R.string.cancel, null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -1046,7 +1050,11 @@ class MainActivity : Activity() {
             var failure: String? = null
             try {
                 val editor = ProjectLayerMetadataEditor(applicationContext)
-                candidate = if (transform != null) ProjectLayerTransformEditor(applicationContext).update(base, layerId, transform)
+                candidate = if (transform != null) {
+                    val transforms = ProjectLayerTransformEditor(applicationContext)
+                    if (base.layers.single { it.id == layerId }.group) transforms.updateGroup(base, layerId, transform)
+                    else transforms.update(base, layerId, transform)
+                }
                     else if (move == 0) editor.update(base, layerId, name, visible, opacity)
                     else editor.move(base, layerId, move)
             } catch (error: Exception) { failure = error.message }
@@ -1276,9 +1284,9 @@ class MainActivity : Activity() {
         releaseInactiveLayerSources()
         if (layer.imageFile == null) {
             previewRequestId.incrementAndGet()
-            canvasPreviewView.showMessage(project, getString(R.string.layer_has_no_pixels_message))
+            canvasPreviewView.showMessage(project, getString(if (layer.group) R.string.group_transform_hint else R.string.layer_has_no_pixels_message))
             updateCanvasTools(layer)
-            statusText.text = getString(R.string.layer_without_image_status, layer.name)
+            statusText.text = if (layer.group) getString(R.string.group_transform_hint) else getString(R.string.layer_without_image_status, layer.name)
             return
         }
         val imageUri = project.imageUris[layer.imageFile]
@@ -1386,7 +1394,11 @@ class MainActivity : Activity() {
         transformRatioButton.isSelected = canvasPreviewView.locksTransformRatio
         cancelTransformButton.visibility = if (canvasPreviewView.isTransformMode && canvasPreviewView.hasActiveEdit) View.VISIBLE else View.GONE
         cancelTransformButton.isEnabled = !exportFlowActive && !projectOpenInProgress
-        transformLayerButton.isEnabled = !busy && !canvasPreviewView.hasActiveEdit && selected?.imageFile != null && !selected.group && !selected.adjustment
+        val transformGroup = selected?.group == true && currentProject?.let { project ->
+            runCatching { GroupTransformPlan.forGroup(project, selected.id) }.isSuccess
+        } == true
+        transformLayerButton.text = getString(if (selected?.group == true) R.string.group_transform else R.string.layer_transform)
+        transformLayerButton.isEnabled = !busy && selected != null && !selected.adjustment && (transformGroup || (!selected.group && selected.imageFile != null))
         val siblings = currentProject?.layers.orEmpty().filter { selected != null && it.parentId == selected.parentId }
         val position = siblings.indexOf(selected)
         moveLayerUpButton.isEnabled = !busy && !canvasPreviewView.hasActiveEdit && position >= 0 && position < siblings.lastIndex
