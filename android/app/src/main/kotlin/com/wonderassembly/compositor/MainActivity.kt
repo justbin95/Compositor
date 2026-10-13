@@ -56,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var redoButton: Button
     private lateinit var exportLayerButton: Button
     private lateinit var saveProjectCopyButton: Button
+    private lateinit var saveProjectFolderButton: Button
     private lateinit var exportCanvasButton: Button
     private lateinit var cancelExportButton: Button
     private lateinit var compositeButton: Button
@@ -246,6 +247,7 @@ class MainActivity : Activity() {
         }
         canvasPreviewView.onBrushStrokeCommitted = { layerName ->
             markRecoveryEdited()
+            reclaimUnusedDocumentResources()
             statusText.text = getString(R.string.brush_stroke_committed_status, layerName)
         }
         canvasPreviewView.onBrushStrokeCancelled = {
@@ -333,6 +335,13 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { leftMargin = dp(4) })
+        saveProjectFolderButton = toolButton(getString(R.string.project_folder_button)) {
+            AlertDialog.Builder(this).setTitle(R.string.project_folder_button)
+                .setMessage(R.string.project_folder_explanation)
+                .setPositiveButton(R.string.project_folder_choose) { _, _ -> requestProjectArchiveExport(folder = true) }
+                .setNegativeButton(android.R.string.cancel, null).show()
+        }
+        canvasToolRow.addView(saveProjectFolderButton)
         exportCanvasButton = toolButton(getString(R.string.canvas_tool_export_canvas)) { chooseCanvasExportFormat() }
         exportCanvasButton.contentDescription = getString(R.string.canvas_tool_export_canvas_accessibility)
         canvasToolRow.addView(exportCanvasButton)
@@ -669,7 +678,7 @@ class MainActivity : Activity() {
             exportLayerPng(pending, uri)
             return
         }
-        if (requestCode == EXPORT_PROJECT_ARCHIVE_REQUEST) {
+        if (requestCode == EXPORT_PROJECT_ARCHIVE_REQUEST || requestCode == SAVE_PROJECT_FOLDER_REQUEST) {
             val pending = pendingProjectArchive
             pendingProjectArchive = null
             val uri = data?.data
@@ -678,7 +687,8 @@ class MainActivity : Activity() {
                 statusText.text = getString(R.string.project_copy_cancelled_status)
                 return
             }
-            writeProjectArchive(pending, uri)
+            if (requestCode == SAVE_PROJECT_FOLDER_REQUEST) writeProjectFolder(pending, uri)
+            else writeProjectArchive(pending, uri)
             return
         }
         if (requestCode == OPEN_PROJECT_ARCHIVE_REQUEST && resultCode == RESULT_OK) {
@@ -868,6 +878,7 @@ class MainActivity : Activity() {
                     if (exportTask?.result != null) exportTask = null
                     selectedLayerId = completed.activeLayerId
                     showProject(completed)
+                    reclaimUnusedDocumentResources()
                     requestInternalRecovery()
                 }
             }
@@ -1112,6 +1123,7 @@ class MainActivity : Activity() {
         exportLayerButton.isEnabled = available && !busy
         saveProjectCopyButton.isEnabled = currentProject != null && !busy
         exportCanvasButton.isEnabled = currentProject != null && !busy
+        saveProjectFolderButton.isEnabled = currentProject != null && !busy
         compositeButton.isEnabled = currentProject != null && !busy
         addImageButton.isEnabled = currentProject != null && !busy && currentProject!!.layers.size < 10
         cancelExportButton.visibility = if (exportTask?.result == null && exportTask != null) View.VISIBLE else View.GONE
@@ -1250,6 +1262,11 @@ class MainActivity : Activity() {
                 result.cancelled -> getString(R.string.canvas_export_cancelled_status)
                 else -> getString(R.string.canvas_export_failed_status, result.failure.orEmpty())
             }
+            ExportTask.Kind.FOLDER -> when {
+                result.succeeded -> getString(R.string.project_folder_complete_status, task.publishedFolderName.orEmpty())
+                result.cancelled -> getString(R.string.project_copy_cancelled_status)
+                else -> getString(R.string.project_copy_failed_status, result.failure.orEmpty())
+            }
             ExportTask.Kind.ARCHIVE -> when {
                 result.succeeded -> getString(R.string.project_copy_complete_status)
                 result.cancelled -> getString(R.string.project_copy_cancelled_status)
@@ -1274,7 +1291,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun requestProjectArchiveExport() {
+    private fun requestProjectArchiveExport(folder: Boolean = false) {
         if (exportTask?.result != null) exportTask = null
         val project = currentProject ?: return
         canvasPreviewView.setBrushMode(false)
@@ -1286,18 +1303,46 @@ class MainActivity : Activity() {
         pendingProjectArchive = PendingProjectArchive(project, editedAssets)
         setExportFlowActive(true)
         statusText.text = getString(R.string.project_copy_choose_status)
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/zip"
+        val intent = Intent(if (folder) Intent.ACTION_OPEN_DOCUMENT_TREE else Intent.ACTION_CREATE_DOCUMENT).apply {
+            if (!folder) addCategory(Intent.CATEGORY_OPENABLE)
+            if (!folder) type = "application/zip"
+            if (folder) addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             putExtra(Intent.EXTRA_TITLE, CompProjectArchiveWriter(contentResolver).suggestedFilename(project))
         }
         try {
-            startActivityForResult(intent, EXPORT_PROJECT_ARCHIVE_REQUEST)
+            startActivityForResult(intent, if (folder) SAVE_PROJECT_FOLDER_REQUEST else EXPORT_PROJECT_ARCHIVE_REQUEST)
         } catch (error: Exception) {
             pendingProjectArchive = null
             setExportFlowActive(false)
             statusText.text = getString(R.string.project_copy_failed_status, error.message.orEmpty())
         }
+    }
+
+    private fun writeProjectFolder(pending: PendingProjectArchive, tree: Uri) {
+        val task = ExportTask(ExportTask.Kind.FOLDER)
+        exportTask = task
+        val app = applicationContext
+        task.startWithPublication(app.cacheDir, {
+            val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+            require(!isInsideSourcePackage(parent, pending.project)) { "Choose a folder outside the source project." }
+        }, { error("Folder publication owns its output streams.") }, { false }, { archive, cancelled ->
+            try {
+                val saved = ProjectFolderSave(app).publish(archive, tree, pending.project, cancelled)
+                task.publishedFolder = saved
+                task.publishedFolderName = runCatching {
+                    app.contentResolver.query(saved, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                        android.os.Bundle(), null)?.use { if (it.moveToFirst()) it.getString(0) else null }
+                }.getOrNull() ?: "Project folder"
+            }
+            catch (error: ProjectFolderPublisher.PublicationFailure) {
+                task.publicationCleanupFailed = error.cleanupFailed
+                if (error.cause is java.util.concurrent.CancellationException) throw requireNotNull(error.cause)
+                throw error
+            }
+        }, { output, cancelled, _ ->
+            CompProjectArchiveWriter(app.contentResolver).write(output, pending.project, pending.editedAssets, cancelled)
+        })
+        monitorExportTask(task)
     }
 
     private fun writeProjectArchive(pending: PendingProjectArchive, targetUri: Uri) {
@@ -1393,7 +1438,7 @@ class MainActivity : Activity() {
                     }
                     is DocumentEdit.Append -> {
                         val target = if (redo) edit.after else edit.before
-                        // Undo hides the imported asset but retains its private files for redo and cleanup.
+                        // Retain private files while the history or a background task still uses them.
                         currentProject = target.copy(additionalCacheDirectories =
                             (target.additionalCacheDirectories + project.additionalCacheDirectories).distinct())
                         selectedLayerId = if (redo) target.activeLayerId else edit.previousLayerId
@@ -1410,6 +1455,7 @@ class MainActivity : Activity() {
                 canvasPreviewView.clear(getString(R.string.choose_project_status))
                 showProject(requireNotNull(currentProject))
             }
+            reclaimUnusedDocumentResources()
             statusText.text = getString(if (redo) R.string.document_redone_status else R.string.document_undone_status)
             updateCanvasTools()
         } catch (error: Exception) {
@@ -1417,6 +1463,28 @@ class MainActivity : Activity() {
         } catch (_: OutOfMemoryError) {
             statusText.text = getString(R.string.document_history_memory_status)
         }
+    }
+
+    private fun reclaimUnusedDocumentResources() {
+        val project = currentProject ?: return
+        if (exportFlowActive || projectOpenInProgress) return
+        val edits = documentHistory.retainedEdits()
+        val projects = listOf(project) + edits.filterIsInstance<DocumentEdit.Append>().flatMap { listOf(it.before, it.after) }
+        val layerIds = projects.flatMap { it.layers }.map { it.id }.toSet() +
+            edits.filterIsInstance<DocumentEdit.Stroke>().map { it.layerId }
+        val obsolete = layerEditingSessions.keys.filter { it.substringAfterLast('|') !in layerIds }
+        obsolete.forEach { key -> layerEditingSessions.remove(key)?.close() }
+        val directories = (project.additionalCacheDirectories + projects.flatMap { it.additionalCacheDirectories }).distinct()
+        val assetPaths = projects.flatMap { it.packageAssets }.mapNotNull { asset ->
+            if (asset.uri.scheme == "file") asset.uri.path?.let { java.io.File(it).canonicalPath } else null
+        }
+        val unused = directories.filter { directory ->
+            val prefix = directory.canonicalPath + java.io.File.separator
+            assetPaths.none { it.startsWith(prefix) }
+        }
+        if (unused.isNotEmpty()) RecoveryTask.releaseProjectWhenFinished(project.copy(
+            archiveCacheDirectory = null, additionalCacheDirectories = unused))
+        currentProject = project.copy(additionalCacheDirectories = directories - unused.toSet())
     }
 
     private fun clearLayerEditingSessions() {
@@ -1692,6 +1760,7 @@ class MainActivity : Activity() {
         private const val EXPORT_CANVAS_REQUEST = 45
         private const val OPEN_IMAGE_REQUEST = 46
         private const val APPEND_IMAGE_REQUEST = 108
+        private const val SAVE_PROJECT_FOLDER_REQUEST = 109
         private const val STATE_PROJECT_URI = "projectTreeUri"
         private const val STATE_PROJECT_IS_ARCHIVE = "projectIsArchive"
         private const val STATE_PROJECT_IS_IMAGE = "projectIsImage"

@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Owns encoding, publication, cleanup and the result independently of any Activity instance. */
 internal class ExportTask(val kind: Kind, val layerName: String = "") {
-    enum class Kind { LAYER, CANVAS, ARCHIVE }
+    enum class Kind { LAYER, CANVAS, ARCHIVE, FOLDER }
     data class Result(val succeeded: Boolean, val cancelled: Boolean, val failure: String?, val cleanupFailed: Boolean)
 
     val progress = AtomicInteger(0)
@@ -17,6 +17,12 @@ internal class ExportTask(val kind: Kind, val layerName: String = "") {
     @Volatile var result: Result? = null
         private set
     private var release: (() -> Unit)? = null
+    @Volatile var publishedFolder: android.net.Uri? = null
+        internal set
+    @Volatile var publishedFolderName: String? = null
+        internal set
+    @Volatile var publicationCleanupFailed = false
+        internal set
 
     @Synchronized fun cancel() {
         if (result == null) cancellationRequested = true
@@ -32,9 +38,18 @@ internal class ExportTask(val kind: Kind, val layerName: String = "") {
         openDestination: () -> OutputStream,
         deleteDestination: () -> Boolean,
         encode: (OutputStream, () -> Boolean, (Int) -> Unit) -> Unit
+    ) = startWithPublication(cacheDirectory, validateDestination, openDestination, deleteDestination, null, encode)
+
+    fun startWithPublication(
+        cacheDirectory: File,
+        validateDestination: () -> Unit,
+        openDestination: () -> OutputStream,
+        deleteDestination: () -> Boolean,
+        publish: ((File, () -> Boolean) -> Unit)?,
+        encode: (OutputStream, () -> Boolean, (Int) -> Unit) -> Unit
     ) {
         Thread({
-            execute(cacheDirectory, validateDestination, openDestination, deleteDestination, encode)
+            executeWithPublication(cacheDirectory, validateDestination, openDestination, deleteDestination, publish, encode)
         }, "compositor-export").start()
     }
 
@@ -45,6 +60,15 @@ internal class ExportTask(val kind: Kind, val layerName: String = "") {
         openDestination: () -> OutputStream,
         deleteDestination: () -> Boolean,
         encode: (OutputStream, () -> Boolean, (Int) -> Unit) -> Unit
+    ) = executeWithPublication(cacheDirectory, validateDestination, openDestination, deleteDestination, null, encode)
+
+    internal fun executeWithPublication(
+        cacheDirectory: File,
+        validateDestination: () -> Unit,
+        openDestination: () -> OutputStream,
+        deleteDestination: () -> Boolean,
+        publish: ((File, () -> Boolean) -> Unit)?,
+        encode: (OutputStream, () -> Boolean, (Int) -> Unit) -> Unit
     ) {
         var temporary: File? = null
         var mayDeleteDestination = false
@@ -54,7 +78,7 @@ internal class ExportTask(val kind: Kind, val layerName: String = "") {
         var cleanupFailed = false
         try {
             validateDestination()
-            mayDeleteDestination = true
+            mayDeleteDestination = publish == null
             checkCancelled()
             temporary = File.createTempFile("compositor-export-", ".tmp", cacheDirectory)
             temporary.outputStream().use { output ->
@@ -62,7 +86,7 @@ internal class ExportTask(val kind: Kind, val layerName: String = "") {
             }
             checkCancelled()
             // Only complete encoded bytes reach SAF; provider publication is still not atomic.
-            openDestination().use { output ->
+            if (publish != null) publish(temporary) { cancellationRequested } else openDestination().use { output ->
                 temporary.inputStream().use { input ->
                     val buffer = ByteArray(64 * 1024)
                     var copied = 0L
@@ -78,7 +102,7 @@ internal class ExportTask(val kind: Kind, val layerName: String = "") {
                 }
             }
             synchronized(this) {
-                checkCancelled()
+                if (publish == null) checkCancelled()
                 succeeded = true
                 // The publication and its close both succeeded. Later cancellation cannot undo it.
                 result = Result(true, false, null, false)
@@ -97,7 +121,7 @@ internal class ExportTask(val kind: Kind, val layerName: String = "") {
                 cleanupFailed = !runCatching(deleteDestination).getOrDefault(false)
             }
             synchronized(this) {
-                result = Result(succeeded, cancelled, failure, cleanupFailed)
+                result = Result(succeeded, cancelled, failure, cleanupFailed || publicationCleanupFailed)
                 release?.invoke()
                 release = null
             }

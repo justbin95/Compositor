@@ -11,6 +11,32 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class DocumentHistoryLifecycleTest {
+    @Test fun discardedAppendReclaimsPrivateFilesButRedoRetainsThem() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        val creator = BlankProjectCreator(activity) { AndroidRasterBudget(64L shl 20, 64L shl 20, 64L shl 20, 2048) }
+        val base = creator.create(16, 16, 72.0) { false }
+        val image = creator.create(8, 8, 72.0) { false }
+        val appended = ProjectLayerAppender(activity).append(base, image)
+        field("currentProject").set(activity, appended)
+        @Suppress("UNCHECKED_CAST")
+        val sessions = field("layerEditingSessions").get(activity) as MutableMap<String, LayerEditingSession>
+        val hiddenKey = "|${base.documentId}|${image.layers.single().id}"
+        sessions[hiddenKey] = LayerEditingSession(activity, image.packageAssets.single().uri, 8, 8, 1L shl 20)
+        val history = DocumentHistory<DocumentEdit>(1L shl 20)
+        field("documentHistory").set(activity, history)
+        history.record(DocumentEdit.Append(base, appended, base.activeLayerId, false), 4096)
+        apply(activity, false)
+        assertTrue(image.archiveCacheDirectory!!.exists())
+        assertTrue(sessions.containsKey(hiddenKey))
+        history.record(DocumentEdit.Append(base, base, base.activeLayerId, false), 1)
+        MainActivity::class.java.getDeclaredMethod("reclaimUnusedDocumentResources").apply { isAccessible = true }.invoke(activity)
+        assertFalse(image.archiveCacheDirectory.exists())
+        assertFalse(sessions.containsKey(hiddenKey))
+        assertTrue(base.archiveCacheDirectory!!.exists())
+        assertEquals(1, (field("currentProject").get(activity) as CompProjectReader.Project).layers.size)
+        controller.pause().stop().destroy()
+    }
     @Test fun appendUndoRedoRetainsAssetsAcrossRecreationAndCleansOnClose() {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         var activity = controller.get()

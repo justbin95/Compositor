@@ -11,6 +11,7 @@ class DocumentHistory<T>(val maxBytes: Long, val maxEntries: Int = 20) {
         private set
     val canUndo get() = undo.isNotEmpty()
     val canRedo get() = redo.isNotEmpty()
+    fun retainedEdits(): List<T> = (undo.toList() + redo.toList()).map { it.edit }
 
     init { require(maxBytes >= 0 && maxEntries > 0) }
 

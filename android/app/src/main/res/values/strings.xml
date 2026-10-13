@@ -166,4 +166,8 @@
     <string name="recovery_delete_message">Delete this internal recovery copy? This does not delete your manually saved project files.</string>
     <string name="recovery_deleted_status">Internal recovery copy deleted.</string>
     <string name="recovery_delete_failed_status">The internal recovery copy could not be deleted.</string>
+    <string name="project_folder_button">Save Project Folder</string>
+    <string name="project_folder_explanation">Choose a parent folder. Each save creates a new independent .comp version and checks its contents. Existing versions are preserved. Keep the completed folder you want to use; file providers may leave an incomplete new folder after an interruption.</string>
+    <string name="project_folder_choose">Choose Folder</string>
+    <string name="project_folder_complete_status">Saved and checked: %1$s. Earlier versions are preserved.</string>
 </resources>

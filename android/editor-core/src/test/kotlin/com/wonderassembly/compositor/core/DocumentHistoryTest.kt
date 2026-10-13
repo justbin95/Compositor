@@ -4,6 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DocumentHistoryTest {
+    @Test fun retainedEditsIncludesRedoAndDropsOnlyAcceptedBranches() {
+        val history = DocumentHistory<String>(10, 2)
+        history.record("A", 3); history.record("B", 3)
+        history.undo {}
+        assertEquals(setOf("A", "B"), history.retainedEdits().toSet())
+        assertFalse(history.record("reject", 11))
+        assertEquals(setOf("A", "B"), history.retainedEdits().toSet())
+        history.record("C", 3)
+        assertEquals(listOf("A", "C"), history.retainedEdits())
+        history.record("D", 3)
+        assertEquals(listOf("C", "D"), history.retainedEdits())
+    }
     @Test fun mixedLayerAndStructureEditsFollowOneBranch() {
         val history = DocumentHistory<String>(100)
         val seen = mutableListOf<String>()

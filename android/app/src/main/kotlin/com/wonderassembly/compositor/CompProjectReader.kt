@@ -416,7 +416,7 @@ class CompProjectReader(private val context: Context) {
             DocumentsContract.Document.COLUMN_SIZE
         )
         val result = ArrayList<Entry>()
-        context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+        context.contentResolver.query(childrenUri, projection, android.os.Bundle(), null)?.use { cursor ->
             while (cursor.moveToNext()) result += cursor.toEntry()
         } ?: throw IllegalArgumentException("Could not read the selected folder.")
         return result
@@ -429,7 +429,7 @@ class CompProjectReader(private val context: Context) {
             DocumentsContract.Document.COLUMN_MIME_TYPE,
             DocumentsContract.Document.COLUMN_SIZE
         )
-        context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+        context.contentResolver.query(uri, projection, android.os.Bundle(), null)?.use { cursor ->
             if (cursor.moveToFirst()) return cursor.toEntry()
         }
         throw IllegalArgumentException("Could not read the selected folder.")

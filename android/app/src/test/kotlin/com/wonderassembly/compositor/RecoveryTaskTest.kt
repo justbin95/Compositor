@@ -19,6 +19,42 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class RecoveryTaskTest {
+    @Test fun discardedRedoAssetsRemainPinnedByRecoveryUntilFinished() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        val creator = BlankProjectCreator(activity) { AndroidRasterBudget(64L shl 20, 64L shl 20, 64L shl 20, 2048) }
+        val base = creator.create(16, 16, 72.0) { false }
+        val image = creator.create(8, 8, 72.0) { false }
+        val appended = ProjectLayerAppender(activity).append(base, image)
+        field("currentProject").set(activity, appended)
+        val history = com.wonderassembly.compositor.core.DocumentHistory<DocumentEdit>(1L shl 20)
+        field("documentHistory").set(activity, history)
+        history.record(DocumentEdit.Append(base, appended, base.activeLayerId, false), 4096)
+        val root = File(activity.filesDir, "recovery-discard-${UUID.randomUUID()}")
+        val entered = CountDownLatch(1); val resume = CountDownLatch(1); val finished = CountDownLatch(1)
+        val task = RecoveryTask(activity.applicationContext, appended, 1, "test", emptyMap(), RecoveryStore(root, {}, {
+            if (it == RecoveryStore.Stage.CREATED) { entered.countDown(); check(resume.await(5, TimeUnit.SECONDS)) }
+        }))
+        task.start(); assertTrue(entered.await(5, TimeUnit.SECONDS))
+        try {
+            MainActivity::class.java.getDeclaredMethod("applyDocumentHistory", Boolean::class.javaPrimitiveType)
+                .apply { isAccessible = true }.invoke(activity, false)
+            history.record(DocumentEdit.Append(base, base, base.activeLayerId, false), 1)
+            MainActivity::class.java.getDeclaredMethod("reclaimUnusedDocumentResources")
+                .apply { isAccessible = true }.invoke(activity)
+            assertTrue(image.archiveCacheDirectory!!.exists())
+            task.releaseWhenFinished { finished.countDown() }
+            resume.countDown(); assertTrue(finished.await(5, TimeUnit.SECONDS))
+            assertFalse(image.archiveCacheDirectory.exists())
+            assertTrue(base.archiveCacheDirectory!!.exists())
+            val saved = CompProjectArchiveImporter(activity, CompProjectReader(activity))
+                .read(android.net.Uri.fromFile(task.result!!.saved!!.file)) { false }
+            try { assertArrayEquals(appended.originalManifestBytes, saved.originalManifestBytes) }
+            finally { saved.releasePrivateAssets() }
+        } finally {
+            resume.countDown(); controller.pause().stop().destroy(); root.deleteRecursively()
+        }
+    }
     @Test fun capturedRevisionSurvivesRecreationWithoutAcknowledgingNewerEdits() {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         val activity = controller.get()
