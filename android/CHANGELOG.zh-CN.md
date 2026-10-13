@@ -1,5 +1,8 @@
 # Compositor Android 更新日志
 
+最新TILE08：[分块PNG、全局采样与实际检查](validation/tile08-20261013.zh-CN.md)。71JVM、七种混合185万余像素差0，Lint/ARM64/仪器构建通过；本地裁剪适配器不替代生产Android区域解码/原生内存验收。用户继续暂缓真机，无ADB/安装；[8项待测](validation/tile08-device-checklist.zh-CN.md)。JPEG仍整图，继续图层操作和完整PARITY。
+
+
 ## 2026-10-13：FOLDER07 文件夹版本副本与资源回收
 
 - Save Project Folder选择父目录后创建独立`.comp`版本，完整ZIP先经生产校验，逐文件SHA256读回、manifest最后写入并预检；旧目录不覆盖。失败只清理本次新目录，提供方返回已有ID/改后缀拒绝，残留明确提示。原位安全更新仍未实现。

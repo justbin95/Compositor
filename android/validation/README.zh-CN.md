@@ -1,5 +1,8 @@
 # Android 验证与接续记录
 
+最新TILE08：[分块PNG、全局采样与实际检查](tile08-20261013.zh-CN.md)。71JVM、七种混合185万余像素差0，Lint/ARM64/仪器构建通过；本地裁剪适配器不替代生产Android区域解码/原生内存验收。用户继续暂缓真机，无ADB/安装；[8项待测](tile08-device-checklist.zh-CN.md)。JPEG仍整图，继续图层操作和完整PARITY。
+
+
 最新开发：[FOLDER07文件夹独立版本与无引用资源回收](folder07-20261013.zh-CN.md)。65JVM、Lint0错误/6建议、ARM64/仪器构建通过；生产SAF接口在本地合成提供方重开验证。用户继续暂缓真机，本轮无ADB/安装/设备操作；[新增11项清单](folder07-device-checklist.zh-CN.md)与恢复/历史旧清单均保持未跑。独立目录副本不等于原位替换，提供方持久性/真实中断/Mac未验收；下一独立开发为大图分块合成。
 
 最新开发：[RECOVERY06内部安全副本](recovery06-20261012.zh-CN.md)。冻结已提交像素、原子发布/轮换、恢复与清理入口；55JVM及200次Windows文件故障注入有证据，Android仪器仅编译。用户明确暂缓真机，本轮无ADB/安装，所有真实设备项记录在[待测清单](recovery06-device-checklist.zh-CN.md)，不继承旧包PASS。外部原位保存、Android恢复实测、分块与Mac未完成。
