@@ -101,6 +101,32 @@ internal class LayerEditingSession(
         }
     }
 
+    fun applyCommittedRegion(bitmap: Bitmap, left: Int, top: Int, isCancelled: () -> Boolean) {
+        if (!hasCommittedChanges) return
+        require(bitmap.isMutable && left >= 0 && top >= 0 && left + bitmap.width <= raster.width && top + bitmap.height <= raster.height)
+        raster.forEachCommittedChunkSnapshot { snapshot ->
+            if (isCancelled()) throw java.util.concurrent.CancellationException("Composition was cancelled.")
+            val bounds = snapshot.bounds
+            val x0 = maxOf(left, bounds.left); val y0 = maxOf(top, bounds.top)
+            val x1 = minOf(left + bitmap.width, bounds.left + bounds.width)
+            val y1 = minOf(top + bitmap.height, bounds.top + bounds.height)
+            if (x0 < x1 && y0 < y1) {
+                val bytes = snapshot.copyPixels()
+                val pixels = IntArray(x1 - x0)
+                for (y in y0 until y1) {
+                    for (x in x0 until x1) {
+                        val offset = ((y - bounds.top) * bounds.width + x - bounds.left) * 4
+                        val alpha = bytes[offset + 3].toInt() and 255
+                        fun channel(index: Int) = if (alpha == 0) 0 else
+                            (((bytes[offset + index].toInt() and 255) * 255 + alpha / 2) / alpha).coerceAtMost(255)
+                        pixels[x - x0] = Color.argb(alpha, channel(0), channel(1), channel(2))
+                    }
+                    bitmap.setPixels(pixels, 0, pixels.size, x0 - left, y - top, pixels.size, 1)
+                }
+            }
+        }
+    }
+
     override fun close() = source.close()
 
     private companion object {
