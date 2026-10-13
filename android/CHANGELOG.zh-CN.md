@@ -1,8 +1,10 @@
 # Compositor Android 更新日志
 
-2026-10-13文档汇总：当前阶段为HANDLES11；完整状态和下一步见[开发计划15–16节](../docs/android-development-plan.zh-CN.md)。本轮仅整理文档，读回现有89项JVM报告（失败/错误/跳过0），没有重新构建或运行功能测试。此前Lint0错误/6建议及ARM64/仪器APK构建通过；新阶段真机、模拟器和Mac运行均未验证，设备旋转仍NOT_RUN。下一开发小步为数值宽高比例联动/百分比缩放，之后继续全部Mac对齐。
+当前阶段SCALE12（2026-10-13）：[数值比例联动与绝对百分比缩放](validation/scale12-20261013.zh-CN.md)，96项JVM（app75/core21）零失败/错误/跳过、Lint0错误/6建议、ARM64与仪器APK构建通过。复用统一历史/保存/恢复，取消与无效输入保护；[6项待测](validation/scale12-device-checklist.zh-CN.md)全部NOT_RUN。用户继续暂缓真机；无模拟器安装/ADB/设备操作，旋转仍NOT_RUN。下一小步为组变换几何/候选清单/历史，再推进多层与独立蒙版、全部Mac对齐。
 
 以下按阶段保留当时检查数量、限制和下一步；旧包PASS不继承到当前包，旧“未实现”描述不覆盖当前总览。
+
+历史文档整理（SCALE12开发前）：当前阶段为HANDLES11；完整状态和下一步见[开发计划15–16节](../docs/android-development-plan.zh-CN.md)。本轮仅整理文档，读回现有89项JVM报告（失败/错误/跳过0），没有重新构建或运行功能测试。此前Lint0错误/6建议及ARM64/仪器APK构建通过；新阶段真机、模拟器和Mac运行均未验证，设备旋转仍NOT_RUN。下一开发小步为数值宽高比例联动/百分比缩放，之后继续全部Mac对齐。
 
 阶段记录 HANDLES11：[画布移动/缩放/旋转手柄与比例锁](validation/handles11-20261013.zh-CN.md)。89JVM、Lint0错误/6建议、ARM64/仪器构建通过；一次拖动一个历史步骤，取消/双指/重建和预算拒绝有本地证据。[6项待测](validation/handles11-device-checklist.zh-CN.md)全NOT_RUN，无模拟器安装/ADB/设备操作。数值比例联动、组多选、独立蒙版与全部Mac对齐继续保留。
 
